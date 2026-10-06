@@ -69,12 +69,12 @@ def set_apa_plot_style():
     })
 
 def fig_to_bytes(fig):
-    """Matplotlib FigureオブジェクトをBytesIOへ変換"""
+    """Matplotlib Figureオブジェクトをbytesへ変換"""
     buf = io.BytesIO()
     fig.savefig(buf, format='png', dpi=300, bbox_inches='tight')
-    buf.seek(0)
     plt.close(fig)
-    return buf
+    return buf.getvalue()
+
 
 
 # ----------------------------------------------------------------------

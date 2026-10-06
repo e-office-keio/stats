@@ -329,7 +329,7 @@ def main():
             with c2:
                 st.write("**度数分布グラフ (APA Style)**")
                 with st.container(height=450):
-                    st.image(res["fig_bytes"], use_container_width=True)
+                    st.image(res["fig_bytes"], use_column_width=True)
 
     # ------------------------------------------------------------------
     # TAB 2: 基本統計量
@@ -371,7 +371,7 @@ def main():
             with c2:
                 st.write("**分布プロット (スクロール表示)**")
                 with st.container(height=480):
-                    st.image(res["fig_bytes"], use_container_width=True)
+                    st.image(res["fig_bytes"], use_column_width=True)
 
     # ------------------------------------------------------------------
     # TAB 3: クロス集計
@@ -415,7 +415,7 @@ def main():
             with col_right:
                 st.write("**構成比グラフ**")
                 with st.container(height=450):
-                    st.image(res["fig_bytes"], use_container_width=True)
+                    st.image(res["fig_bytes"], use_column_width=True)
 
     # ------------------------------------------------------------------
     # TAB 4: t検定 / Welch検定
@@ -465,7 +465,7 @@ def main():
             with col_right:
                 st.write("**平均値と比較グラフ (95%信頼区間)**")
                 with st.container(height=450):
-                    st.image(res["fig_bytes"], use_container_width=True)
+                    st.image(res["fig_bytes"], use_column_width=True)
 
     # ------------------------------------------------------------------
     # TAB 5: 分散分析 (ANOVA)
@@ -519,7 +519,7 @@ def main():
             with c_r:
                 st.write("**平均値比較プロット**")
                 with st.container(height=450):
-                    st.image(res["fig_bytes"], use_container_width=True)
+                    st.image(res["fig_bytes"], use_column_width=True)
 
     # ------------------------------------------------------------------
     # TAB 6: 相関分析
@@ -567,7 +567,7 @@ def main():
             with c_r:
                 st.write("**相関ヒートマップ**")
                 with st.container(height=450):
-                    st.image(res["fig_bytes"], use_container_width=True)
+                    st.image(res["fig_bytes"], use_column_width=True)
 
     # ------------------------------------------------------------------
     # TAB 7: 重回帰分析
@@ -614,7 +614,7 @@ def main():
             with c_r:
                 st.write("**実測値 vs. 予測値プロット**")
                 with st.container(height=450):
-                    st.image(res["fig_bytes"], use_container_width=True)
+                    st.image(res["fig_bytes"], use_column_width=True)
 
     # ------------------------------------------------------------------
     # TAB 8: 因子分析
@@ -664,7 +664,7 @@ def main():
             with c_r:
                 st.write("**スクリープロット**")
                 with st.container(height=450):
-                    st.image(res["fig_bytes"], use_container_width=True)
+                    st.image(res["fig_bytes"], use_column_width=True)
 
 
 if __name__ == "__main__":

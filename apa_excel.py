@@ -153,10 +153,14 @@ def add_native_excel_chart(ws, data_info, title="グラフ"):
 
 def add_image_to_sheet(ws, img_bytes, cell_location="H2"):
     """
-    BytesIO画像データをExcelシートの指定位置に挿入する
+    画像データ(bytes または BytesIO)をExcelシートの指定位置に挿入する
     """
-    img_bytes.seek(0)
-    img = OpenPyxlImage(img_bytes)
+    if isinstance(img_bytes, bytes):
+        img_buf = io.BytesIO(img_bytes)
+    else:
+        img_bytes.seek(0)
+        img_buf = img_bytes
+    img = OpenPyxlImage(img_buf)
     img.width = 550
     img.height = 380
     ws.add_image(img, cell_location)
