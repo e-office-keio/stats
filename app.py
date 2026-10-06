@@ -314,39 +314,57 @@ def main():
     # ------------------------------------------------------------------
     with tab1:
         st.subheader("1. 単純集計 (Frequency Analysis)")
-        target_var = st.selectbox("集計したいカテゴリ変数を選択:", all_columns, key="freq_var")
+        target_vars = st.multiselect("集計したいカテゴリ変数を選択 (複数選択可):", all_columns, default=[all_columns[0]] if all_columns else [], key="freq_vars")
         
         if st.button("🚀 単純集計を実行", key="run_freq", type="primary"):
-            with st.spinner(f"『{target_var}』の単純集計を計算中..."):
-                res_df, note, fig_bytes = stats_engine.analyze_frequency(df, target_var)
+            if target_vars:
+                results_dict = {}
+                with st.spinner(f"{len(target_vars)} 個の変数の単純集計を計算中..."):
+                    for var in target_vars:
+                        res_df, note, fig_bytes = stats_engine.analyze_frequency(df, var)
+                        results_dict[var] = {
+                            "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "target_var": var
+                        }
                 st.session_state["results"]["freq"] = {
-                    "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "target_var": target_var
+                    "results_dict": results_dict
                 }
-            st.toast("単純集計が完了しました！", icon="✅")
+                st.toast(f"{len(results_dict)} 個の変数の単純集計が完了しました！", icon="✅")
+            else:
+                st.warning("1つ以上の変数を選択してください。")
             
         if "freq" in st.session_state["results"]:
-            res = st.session_state["results"]["freq"]
-            
-            if st.button("➕ この結果をExcelレポートに追加", key="btn_add_freq"):
-                st.session_state["analysis_queue"].append({
-                    "sheet_name": f"単純集計_{res['target_var']}",
-                    "title": f"{res['target_var']} の度数分布表",
-                    "df": res["res_df"],
-                    "note": res["note"],
-                    "fig_bytes": res["fig_bytes"]
-                })
-                st.toast(f"『単純集計_{res['target_var']}』をレポートリストに追加しました！", icon="📋")
-                st.rerun()
+            res_data = st.session_state["results"]["freq"]
+            results_dict = res_data.get("results_dict", {})
+            if not results_dict and "res_df" in res_data:
+                results_dict = {res_data["target_var"]: res_data}
+                
+            if results_dict:
+                c_btn1, _ = st.columns([2, 1])
+                with c_btn1:
+                    if st.button(f"➕ 選択した全変数 ({len(results_dict)}件) をExcelレポートに追加", key="btn_add_freq"):
+                        for var, res in results_dict.items():
+                            st.session_state["analysis_queue"].append({
+                                "sheet_name": f"単純集計_{var}",
+                                "title": f"{var} の度数分布表",
+                                "df": res["res_df"],
+                                "note": res["note"],
+                                "fig_bytes": res["fig_bytes"]
+                            })
+                        st.toast(f"『単純集計 ({len(results_dict)}件)』をレポートリストに追加しました！", icon="📋")
+                        st.rerun()
 
-            c1, c2 = st.columns([2.2, 2])
-            with c1:
-                st.write(f"**集計表: {res['target_var']}**")
-                st.dataframe(res["res_df"], use_container_width=True)
-                st.caption(res["note"])
-            with c2:
-                st.write("**度数分布グラフ (APA Style)**")
-                with st.container(height=450):
-                    st.image(res["fig_bytes"], use_column_width=True)
+                active_var = st.selectbox("表示する変数の切替:", list(results_dict.keys()), key="select_freq_display")
+                if active_var in results_dict:
+                    res = results_dict[active_var]
+                    c1, c2 = st.columns([2.2, 2])
+                    with c1:
+                        st.write(f"**集計表: {res['target_var']}**")
+                        st.dataframe(res["res_df"], use_container_width=True)
+                        st.caption(res["note"])
+                    with c2:
+                        st.write("**度数分布グラフ (APA Style)**")
+                        with st.container(height=450):
+                            st.image(res["fig_bytes"], use_column_width=True)
 
     # ------------------------------------------------------------------
     # TAB 2: 基本統計量
@@ -439,100 +457,155 @@ def main():
     # ------------------------------------------------------------------
     with tab4:
         st.subheader("4. 2群の平均値の差の検定 (t-Test / Welch Test)")
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3 = st.columns([1.5, 2, 1.5])
         with c1:
             group_var = st.selectbox("グループ変数 (2カテゴリ):", all_columns, key="tt_group")
         with c2:
-            num_var = st.selectbox("比較する数値変数:", numeric_columns, key="tt_num")
+            num_vars = st.multiselect("比較する従属変数 (複数選択可):", numeric_columns, default=numeric_columns[:min(3, len(numeric_columns))], key="tt_nums")
         with c3:
             equal_var_opt = st.selectbox("等分散性の仮定:", ["Welchのt検定 (推奨: 等分散非仮定)", "Studentのt検定 (等分散仮定)"])
             equal_var = True if "Student" in equal_var_opt else False
             
         if st.button("🚀 t検定を実行", key="run_tt", type="primary"):
-            if group_var and num_var:
-                try:
-                    with st.spinner("t検定と効果量を計算中..."):
-                        res_df, note, fig_bytes = stats_engine.analyze_ttest(df, group_var, num_var, equal_var=equal_var)
-                        st.session_state["results"]["tt"] = {
-                            "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "num_var": num_var, "group_var": group_var
-                        }
-                    st.toast("t検定が完了しました！", icon="✅")
-                except Exception as e:
-                    st.error(f"分析エラー: {e}")
+            if group_var and num_vars:
+                results_dict = {}
+                errors = []
+                with st.spinner(f"{len(num_vars)} 個の従属変数のt検定を計算中..."):
+                    for nv in num_vars:
+                        try:
+                            res_df, note, fig_bytes = stats_engine.analyze_ttest(df, group_var, nv, equal_var=equal_var)
+                            results_dict[nv] = {
+                                "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "num_var": nv, "group_var": group_var
+                            }
+                        except Exception as e:
+                            errors.append(f"{nv}: {e}")
+                
+                if results_dict:
+                    st.session_state["results"]["tt"] = {
+                        "results_dict": results_dict, "group_var": group_var
+                    }
+                    st.toast(f"{len(results_dict)} 個の従属変数のt検定が完了しました！", icon="✅")
+                if errors:
+                    for err in errors:
+                        st.error(f"分析エラー ({err})")
+            else:
+                st.warning("グループ変数と1つ以上の従属変数を選択してください。")
                     
         if "tt" in st.session_state["results"]:
-            res = st.session_state["results"]["tt"]
-            
-            if st.button("➕ この結果をExcelレポートに追加", key="btn_add_tt"):
-                st.session_state["analysis_queue"].append({
-                    "sheet_name": f"t検定_{res['num_var']}",
-                    "title": f"2群の平均値の比較 (t検定: {res['num_var']} × {res['group_var']})",
-                    "df": res["res_df"],
-                    "note": res["note"],
-                    "fig_bytes": res["fig_bytes"]
-                })
-                st.toast("『t検定結果』をレポートリストに追加しました！", icon="📋")
-                st.rerun()
+            res_data = st.session_state["results"]["tt"]
+            results_dict = res_data.get("results_dict", {})
+            if not results_dict and "res_df" in res_data:
+                results_dict = {res_data["num_var"]: res_data}
+                
+            if results_dict:
+                grp_v = res_data.get("group_var", "")
+                c_btn1, _ = st.columns([2, 1])
+                with c_btn1:
+                    if st.button(f"➕ 選択した全従属変数 ({len(results_dict)}件) の結果をExcelレポートに追加", key="btn_add_tt"):
+                        for nv, res in results_dict.items():
+                            st.session_state["analysis_queue"].append({
+                                "sheet_name": f"t検定_{nv}",
+                                "title": f"2群の平均値の比較 (t検定: {nv} × {grp_v})",
+                                "df": res["res_df"],
+                                "note": res["note"],
+                                "fig_bytes": res["fig_bytes"]
+                            })
+                        st.toast(f"『t検定結果 ({len(results_dict)}件)』をレポートリストに追加しました！", icon="📋")
+                        st.rerun()
 
-            col_left, col_right = st.columns([2.5, 2])
-            with col_left:
-                st.write(f"**t検定結果 ({res['num_var']} × {res['group_var']})**")
-                st.dataframe(res["res_df"], use_container_width=True)
-                st.caption(res["note"])
-            with col_right:
-                st.write("**平均値と比較グラフ (95%信頼区間)**")
-                with st.container(height=450):
-                    st.image(res["fig_bytes"], use_column_width=True)
+                active_nv = st.selectbox("表示する従属変数の切替:", list(results_dict.keys()), key="select_tt_display")
+                if active_nv in results_dict:
+                    res = results_dict[active_nv]
+                    col_left, col_right = st.columns([2.5, 2])
+                    with col_left:
+                        st.write(f"**t検定結果 ({res['num_var']} × {res['group_var']})**")
+                        st.dataframe(res["res_df"], use_container_width=True)
+                        st.caption(res["note"])
+                    with col_right:
+                        st.write("**平均値と比較グラフ (95%信頼区間)**")
+                        with st.container(height=450):
+                            st.image(res["fig_bytes"], use_column_width=True)
 
     # ------------------------------------------------------------------
     # TAB 5: 分散分析 (ANOVA)
     # ------------------------------------------------------------------
     with tab5:
         st.subheader("5. 一元配置分散分析 & 多重比較 (One-Way ANOVA)")
-        c1, c2 = st.columns(2)
+        c1, c2 = st.columns([1.5, 2])
         with c1:
             anova_group = st.selectbox("要因 (グループ変数):", all_columns, key="anova_grp")
         with c2:
-            anova_num = st.selectbox("従属変数 (数値変数):", numeric_columns, key="anova_num")
+            anova_nums = st.multiselect("従属変数 (複数選択可):", numeric_columns, default=numeric_columns[:min(3, len(numeric_columns))], key="anova_nums")
             
         if st.button("🚀 分散分析(ANOVA)を実行", key="run_anova", type="primary"):
-            if anova_group and anova_num:
-                with st.spinner("一元配置分散分析とTukey多重比較を実行中..."):
-                    desc_df, tukey_df, note, fig_bytes = stats_engine.analyze_anova(df, anova_group, anova_num)
+            if anova_group and anova_nums:
+                results_dict = {}
+                errors = []
+                with st.spinner(f"{len(anova_nums)} 個の従属変数の分散分析を実行中..."):
+                    for nv in anova_nums:
+                        try:
+                            desc_df, tukey_df, note, fig_bytes = stats_engine.analyze_anova(df, anova_group, nv)
+                            results_dict[nv] = {
+                                "desc_df": desc_df, "tukey_df": tukey_df, "note": note, "fig_bytes": fig_bytes,
+                                "anova_num": nv, "anova_group": anova_group
+                            }
+                        except Exception as e:
+                            errors.append(f"{nv}: {e}")
+                
+                if results_dict:
                     st.session_state["results"]["anova"] = {
-                        "desc_df": desc_df, "tukey_df": tukey_df, "note": note, "fig_bytes": fig_bytes,
-                        "anova_num": anova_num, "anova_group": anova_group
+                        "results_dict": results_dict, "anova_group": anova_group
                     }
-                st.toast("分散分析が完了しました！", icon="✅")
+                    st.toast(f"{len(results_dict)} 個の従属変数の分散分析が完了しました！", icon="✅")
+                if errors:
+                    for err in errors:
+                        st.error(f"分析エラー ({err})")
+            else:
+                st.warning("要因変数と1つ以上の従属変数を選択してください。")
                 
         if "anova" in st.session_state["results"]:
-            res = st.session_state["results"]["anova"]
-            
-            if st.button("➕ この結果をExcelレポートに追加", key="btn_add_anova"):
-                st.session_state["analysis_queue"].append({
-                    "sheet_name": f"分散分析_{res['anova_num']}",
-                    "title": f"一元配置分散分析表 ({res['anova_num']} × {res['anova_group']})",
-                    "df": res["desc_df"],
-                    "note": res["note"],
-                    "fig_bytes": res["fig_bytes"]
-                })
-                st.session_state["analysis_queue"].append({
-                    "sheet_name": f"多重比較_{res['anova_num']}",
-                    "title": f"Tukey HSD 多重比較結果 ({res['anova_num']})",
-                    "df": res["tukey_df"],
-                    "note": "注. 有意水準 alpha = .05 におけるTukeyのHSD検定結果。"
-                })
-                st.toast("『分散分析 & 多重比較結果』をレポートリストに追加しました！", icon="📋")
-                st.rerun()
-
-            c_l, c_r = st.columns([2.5, 2])
-            with c_l:
-                st.write("**記述統計量 (各群の平均値と標準偏差)**")
-                st.dataframe(res["desc_df"], use_container_width=True)
-                st.caption(res["note"])
+            res_data = st.session_state["results"]["anova"]
+            results_dict = res_data.get("results_dict", {})
+            if not results_dict and "desc_df" in res_data:
+                results_dict = {res_data["anova_num"]: res_data}
                 
-                st.write("**Tukey HSD 多重比較結果**")
-                st.dataframe(res["tukey_df"], use_container_width=True)
+            if results_dict:
+                grp_v = res_data.get("anova_group", "")
+                c_btn1, _ = st.columns([2, 1])
+                with c_btn1:
+                    if st.button(f"➕ 選択した全従属変数 ({len(results_dict)}件) の結果をExcelレポートに追加", key="btn_add_anova"):
+                        for nv, res in results_dict.items():
+                            st.session_state["analysis_queue"].append({
+                                "sheet_name": f"分散分析_{nv}",
+                                "title": f"一元配置分散分析表 ({nv} × {grp_v})",
+                                "df": res["desc_df"],
+                                "note": res["note"],
+                                "fig_bytes": res["fig_bytes"]
+                            })
+                            st.session_state["analysis_queue"].append({
+                                "sheet_name": f"多重比較_{nv}",
+                                "title": f"Tukey HSD 多重比較結果 ({nv})",
+                                "df": res["tukey_df"],
+                                "note": "注. 有意水準 alpha = .05 におけるTukeyのHSD検定結果。"
+                            })
+                        st.toast(f"『分散分析 & 多重比較結果 ({len(results_dict)}件)』をレポートリストに追加しました！", icon="📋")
+                        st.rerun()
+
+                active_nv = st.selectbox("表示する従属変数の切替:", list(results_dict.keys()), key="select_anova_display")
+                if active_nv in results_dict:
+                    res = results_dict[active_nv]
+                    c_l, c_r = st.columns([2.5, 2])
+                    with c_l:
+                        st.write("**記述統計量 (各群の平均値と標準偏差)**")
+                        st.dataframe(res["desc_df"], use_container_width=True)
+                        st.caption(res["note"])
+                        
+                        st.write("**Tukey HSD 多重比較結果**")
+                        st.dataframe(res["tukey_df"], use_container_width=True)
+                    with c_r:
+                        st.write("**平均値比較プロット**")
+                        with st.container(height=450):
+                            st.image(res["fig_bytes"], use_column_width=True)
             with c_r:
                 st.write("**平均値比較プロット**")
                 with st.container(height=450):
