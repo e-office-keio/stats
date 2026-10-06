@@ -115,6 +115,20 @@ def main():
                 st.toast("レポートリストをクリアしました", icon="🧹")
                 st.rerun()
 
+        st.divider()
+        with st.expander("🛠 日本語フォント診断 (Streamlit Cloud確認用)"):
+            has_jap = getattr(stats_engine, "HAS_JAPANIZE", False)
+            if has_jap:
+                st.success("✅ `japanize-matplotlib` 読み込み成功")
+            else:
+                st.error("❌ `japanize-matplotlib` 未適用 (再構築またはキャッシュクリアが必要です)")
+                
+            import matplotlib.pyplot as plt
+            current_font = plt.rcParams.get("font.family", ["不明"])
+            if isinstance(current_font, list):
+                current_font = current_font[0]
+            st.caption(f"現在のMatplotlibフォント: `{current_font}`")
+
     # データフレームの初期ロード処理
     if uploaded_file is None:
         if "df" not in st.session_state:

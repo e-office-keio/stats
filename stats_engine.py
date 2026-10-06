@@ -28,7 +28,12 @@ except ImportError:
 def setup_japanese_font():
     """環境に合わせた日本語フォントの設定"""
     if HAS_JAPANIZE:
-        # japanize_matplotlib がロードされていれば何もしない (IPAexGothicが自動適用される)
+        try:
+            japanize_matplotlib.japanize()
+        except Exception:
+            pass
+        plt.rcParams['font.family'] = 'IPAexGothic'
+        plt.rcParams['font.sans-serif'] = ['IPAexGothic', 'DejaVu Sans', 'sans-serif']
         plt.rcParams['axes.unicode_minus'] = False
         return
 
@@ -51,7 +56,12 @@ setup_japanese_font()
 def set_apa_plot_style():
     """APA形式のグラフスタイルを設定"""
     setup_japanese_font()
+    font_name = plt.rcParams.get('font.family', ['sans-serif'])
+    if isinstance(font_name, list):
+        font_name = font_name[0]
+        
     plt.rcParams.update({
+        'font.family': font_name,
         'font.size': 11,
         'axes.labelsize': 11,
         'axes.titlesize': 12,
@@ -67,6 +77,7 @@ def set_apa_plot_style():
         'grid.linestyle': '--',
         'grid.alpha': 0.5
     })
+    setup_japanese_font()
 
 def fig_to_bytes(fig):
     """Matplotlib Figureオブジェクトをbytesへ変換"""
