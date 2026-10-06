@@ -212,52 +212,82 @@ def build_full_excel_report(analysis_results):
                 elif "t検定" in sheet_name or "分散分析" in sheet_name:
                     m_sd_cols = [c for c in df.columns if "M (SD)" in str(c)]
                     if m_sd_cols:
-                        chart_start_row = data_info["data_end_row"] + 4
-                        ws.cell(row=chart_start_row - 1, column=1, value="[ グラフ生成用数値データ (平均値) ]").font = Font(name="游ゴシック", size=10, bold=True, italic=True)
+                        chart_start_base = data_info["data_end_row"] + 4
+                        ws.cell(row=chart_start_base - 1, column=1, value="[ グラフ生成用数値データ (平均値) ]").font = Font(name="游ゴシック", size=10, bold=True, italic=True)
                         
-                        ws.cell(row=chart_start_row, column=1, value="従属変数")
-                        for idx, col_name in enumerate(m_sd_cols, start=2):
-                            clean_grp_name = str(col_name).replace(" M (SD)", "")
-                            ws.cell(row=chart_start_row, column=idx, value=clean_grp_name)
+                        num_groups = len(m_sd_cols)
+                        group_names = [str(c).replace(" M (SD)", "") for c in m_sd_cols]
+                        
+                        # 各従属変数ごとに個別ヘルパーテーブル & 個別ネイティブチャートを作成
+                        for r_idx, (dep_var, row) in enumerate(df.iterrows()):
+                            curr_start_row = chart_start_base + (r_idx * 4)
                             
-                        for r_offset, (dep_var, row) in enumerate(df.iterrows(), start=1):
-                            curr_r = chart_start_row + r_offset
-                            ws.cell(row=curr_r, column=1, value=str(dep_var))
-                            for c_offset, col_name in enumerate(m_sd_cols, start=2):
+                            # ヘッダー (従属変数 | Group 1 | Group 2 ...)
+                            ws.cell(row=curr_start_row, column=1, value="従属変数")
+                            for c_idx, grp_name in enumerate(group_names, start=2):
+                                ws.cell(row=curr_start_row, column=c_idx, value=grp_name)
+                                
+                            # データ行
+                            curr_data_row = curr_start_row + 1
+                            ws.cell(row=curr_data_row, column=1, value=str(dep_var))
+                            for c_idx, col_name in enumerate(m_sd_cols, start=2):
                                 val_str = str(row[col_name])
                                 try:
                                     mean_val = float(val_str.split("(")[0].strip())
-                                    ws.cell(row=curr_r, column=c_offset, value=mean_val)
+                                    ws.cell(row=curr_data_row, column=c_idx, value=mean_val)
                                 except Exception:
-                                    ws.cell(row=curr_r, column=c_offset, value=0.0)
+                                    ws.cell(row=curr_data_row, column=c_idx, value=0.0)
                                     
-                        chart_end_row = chart_start_row + len(df)
-                        chart_num_cols = len(m_sd_cols) + 1
-                        
-                        chart_data_info = {
-                            "header_row": chart_start_row,
-                            "data_start_row": chart_start_row + 1,
-                            "data_end_row": chart_end_row,
-                            "num_cols": chart_num_cols
-                        }
-                        add_native_excel_chart(
-                            ws, chart_data_info, title=f"{title}",
-                            min_col=2, max_col=chart_num_cols,
-                            y_title="平均値 (M)", x_title="従属変数"
-                        )
+                            # 変数1個ごとのチャート作成
+                            chart_cell = f"H{2 + r_idx * 16}"
+                            chart = BarChart()
+                            chart.type = "col"
+                            chart.style = 10
+                            chart.title = f"{dep_var} - 平均値比較"
+                            chart.y_axis.title = "平均値 (M)"
+                            chart.x_axis.title = "グループ"
+                            
+                            data_ref = Reference(ws, min_col=2, min_row=curr_start_row, max_col=num_groups + 1, max_row=curr_data_row)
+                            cats_ref = Reference(ws, min_col=1, min_row=curr_data_row, max_row=curr_data_row)
+                            
+                            chart.add_data(data_ref, titles_from_data=True)
+                            chart.set_categories(cats_ref)
+                            chart.width = 15
+                            chart.height = 9.5
+                            
+                            ws.add_chart(chart, chart_cell)
+                            
                         has_native_chart = True
-                elif "クロス" in sheet_name:
-                    add_native_excel_chart(ws, data_info, title=f"{title}")
+                elif "構成比" in sheet_name:
+                    chart = BarChart()
+                    chart.type = "col"
+                    chart.grouping = "stacked"
+                    chart.overlap = 100
+                    chart.title = f"{title}"
+                    chart.y_axis.title = "構成比 (%)"
+                    chart.x_axis.title = "グループ / カテゴリ"
+                    
+                    data_ref = Reference(ws, min_col=2, min_row=data_info["header_row"], max_col=data_info["num_cols"], max_row=data_info["data_end_row"])
+                    cats_ref = Reference(ws, min_col=1, min_row=data_info["data_start_row"], max_row=data_info["data_end_row"])
+                    
+                    chart.add_data(data_ref, titles_from_data=True)
+                    chart.set_categories(cats_ref)
+                    chart.width = 16
+                    chart.height = 10
+                    ws.add_chart(chart, "H2")
                     has_native_chart = True
+                elif "クロス" in sheet_name:
+                    # クロス度数表は画像グラフ(fig_bytes)を出力
+                    pass
             except Exception:
                 pass  # 万が一ネイティブチャート作成不可時は画像フォールバック
         
         if fig_bytes is not None:
             # 編集可能ネイティブグラフが存在する場合は重複する画像グラフの挿入をスキップ
-            if ("単純集計" in sheet_name or "分布_" in sheet_name or "ヒストグラム" in sheet_name or "t検定" in sheet_name or "分散分析" in sheet_name) and has_native_chart:
+            if ("単純集計" in sheet_name or "分布_" in sheet_name or "ヒストグラム" in sheet_name or "t検定" in sheet_name or "分散分析" in sheet_name or "構成比" in sheet_name) and has_native_chart:
                 pass
             else:
-                img_pos = "H18" if has_native_chart else "H2"
+                img_pos = "H2"
                 add_image_to_sheet(ws, fig_bytes, cell_location=img_pos)
             
     output = io.BytesIO()
