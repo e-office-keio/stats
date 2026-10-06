@@ -14,14 +14,40 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import seaborn as sns
 
-# 日本語フォントの設定
-plt.rcParams['font.sans-serif'] = ['Hiragino Sans', 'Yu Gothic', 'Meiryo', 'IPAexGothic', 'sans-serif']
-plt.rcParams['axes.unicode_minus'] = False
+# ----------------------------------------------------------------------
+# 日本語フォントの高度自動検出 (文字化け対策)
+# ----------------------------------------------------------------------
+def setup_japanese_font():
+    """環境に存在する日本語フォントを自動探索しMatplotlibに適用"""
+    system_fonts = [f.name for f in fm.fontManager.ttflist]
+    japanese_font_candidates = [
+        'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 
+        'Meiryo', 'TakaoPGothic', 'IPAexGothic', 'IPAGothic', 
+        'Noto Sans CJK JP', 'Arial Unicode MS'
+    ]
+    
+    selected_font = None
+    for font in japanese_font_candidates:
+        if font in system_fonts:
+            selected_font = font
+            break
+            
+    if selected_font:
+        plt.rcParams['font.family'] = selected_font
+        plt.rcParams['font.sans-serif'] = [selected_font] + japanese_font_candidates
+    else:
+        plt.rcParams['font.sans-serif'] = japanese_font_candidates + ['sans-serif']
+        
+    plt.rcParams['axes.unicode_minus'] = False
+
+setup_japanese_font()
 
 def set_apa_plot_style():
     """APA形式のグラフスタイルを設定（日本語フォント対応）"""
+    setup_japanese_font()
     plt.rcParams.update({
         'font.size': 11,
         'axes.labelsize': 11,
@@ -52,7 +78,7 @@ def fig_to_bytes(fig):
 # データ前処理・リコード・除外機能
 # ----------------------------------------------------------------------
 def filter_exclude_values(df, var_name, exclude_values):
-    """特定の値を指定して該当行を除外 (NaN化または行削除)"""
+    """特定の値を指定して該当行を除外"""
     new_df = df.copy()
     new_df = new_df[~new_df[var_name].isin(exclude_values)]
     return new_df
@@ -106,7 +132,7 @@ def analyze_frequency(df, var_name):
     fig, ax = plt.subplots(figsize=(6, 4))
     bars = ax.bar(res_df.index.astype(str), res_df["度数 (N)"], color="#2b5c8f", edgecolor="black", width=0.5)
     ax.set_ylabel("度数 (N)")
-    ax.set_xlabel(var_name)
+    ax.set_xlabel(str(var_name))
     ax.set_title(f"{var_name} の度数分布")
     
     for bar in bars:
@@ -155,7 +181,7 @@ def analyze_descriptives(df, num_vars):
         s = df[var].dropna()
         sns.histplot(s, kde=True, ax=ax, color="#34495e", edgecolor="white", linewidth=0.5)
         ax.set_title(f"{var} のデータ分布 (ヒストグラム & 確率密度)")
-        ax.set_xlabel(var)
+        ax.set_xlabel(str(var))
         ax.set_ylabel("度数 / 密度")
         
     plt.tight_layout()
@@ -183,9 +209,9 @@ def analyze_crosstab(df, row_var, col_var):
     fig, ax = plt.subplots(figsize=(6.5, 4))
     ct_prop.plot(kind='bar', stacked=True, ax=ax, colormap='Blues', edgecolor='black', width=0.5)
     ax.set_ylabel("構成比 (%)")
-    ax.set_xlabel(row_var)
+    ax.set_xlabel(str(row_var))
     ax.set_title(f"クロス集計: {row_var} × {col_var}")
-    ax.legend(title=col_var, bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax.legend(title=str(col_var), bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
     fig_bytes = fig_to_bytes(fig)
     
@@ -247,8 +273,8 @@ def analyze_ttest(df, group_var, num_var, equal_var=False):
     labels = [str(g1_val), str(g2_val)]
     
     bars = ax.bar(labels, means, yerr=errors, capsize=5, color=['#4c72b0', '#55a868'], edgecolor='black', width=0.4)
-    ax.set_ylabel(num_var)
-    ax.set_xlabel(group_var)
+    ax.set_ylabel(str(num_var))
+    ax.set_xlabel(str(group_var))
     ax.set_title(f"{group_var} による {num_var} の平均値比較")
     plt.tight_layout()
     fig_bytes = fig_to_bytes(fig)
@@ -287,8 +313,8 @@ def analyze_anova(df, group_var, num_var):
     fig, ax = plt.subplots(figsize=(6, 4))
     sns.barplot(data=clean_df, x=group_var, y=num_var, ax=ax, capsize=0.1, palette="Blues_d", edgecolor="black")
     ax.set_title(f"一元配置分散分析: {group_var} × {num_var}")
-    ax.set_xlabel(group_var)
-    ax.set_ylabel(num_var)
+    ax.set_xlabel(str(group_var))
+    ax.set_ylabel(str(num_var))
     plt.tight_layout()
     fig_bytes = fig_to_bytes(fig)
     

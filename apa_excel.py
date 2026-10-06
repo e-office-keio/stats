@@ -1,6 +1,6 @@
 """
-APA Style Excel Report Generator using openpyxl and matplotlib.
-(Japanese Title and Notation Support)
+APA Style Excel Report Generator with Native Editable Excel Charts & Image fallback.
+(Full Japanese & Font Fix Support)
 """
 
 import io
@@ -10,6 +10,7 @@ import openpyxl
 from openpyxl.styles import Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.drawing.image import Image as OpenPyxlImage
+from openpyxl.chart import BarChart, LineChart, Reference, Series
 
 def create_apa_border():
     """APAスタイル用ボーダー定義"""
@@ -21,16 +22,9 @@ def format_apa_table(ws, start_row, title, df, note=None, table_num=1):
     """
     指定したワークシートにDFをAPA7thスタイルの表（日本語表記）として書き込む
     
-    Parameters:
-    - ws: openpyxl Worksheet
-    - start_row: 開始行番号 (1-indexed)
-    - title: 表のタイトル (str)
-    - df: 表示するpandas DataFrame
-    - note: 表下の注釈テキスト (str)
-    - table_num: 表番号 (int)
-    
     Returns:
-    - next_row: 次の要素を書き込める開始行番号
+    - data_info: {"start_row": int, "end_row": int, "num_cols": int}
+    - current_row: 次の要素を書き込める開始行番号
     """
     thick_side, thin_side = create_apa_border()
     font_family = "游ゴシック"  # 日本語標準フォント
@@ -64,16 +58,15 @@ def format_apa_table(ws, start_row, title, df, note=None, table_num=1):
         cell.border = Border(top=thick_side, bottom=thin_side)
         
     current_row += 1
+    data_start_row = current_row
     
     # データ行の書き込み
     for r_idx, (idx_val, row) in enumerate(df.iterrows()):
         r = current_row + r_idx
-        # インデックス列
         idx_cell = ws.cell(row=r, column=1, value=str(idx_val))
         idx_cell.font = Font(name=font_family, size=11)
         idx_cell.alignment = Alignment(horizontal="left", vertical="center")
         
-        # 数値・文字列データ列
         for c_idx, val in enumerate(row, start=2):
             val_cell = ws.cell(row=r, column=c_idx)
             val_cell.font = Font(name=font_family, size=11)
@@ -121,12 +114,41 @@ def format_apa_table(ws, start_row, title, df, note=None, table_num=1):
         for cell in col:
             if cell.row >= start_row and cell.row <= current_row:
                 val_str = str(cell.value or "")
-                # 日本語全角文字の幅を考慮（全角は約2文字分）
                 len_count = sum(2 if ord(c) > 256 else 1 for c in val_str)
                 max_len = max(max_len, len_count)
         ws.column_dimensions[col_letter].width = max(max_len + 4, 14)
         
-    return current_row
+    data_info = {
+        "header_row": header_row,
+        "data_start_row": data_start_row,
+        "data_end_row": data_end_row,
+        "num_cols": num_cols
+    }
+    return data_info, current_row
+
+
+def add_native_excel_chart(ws, data_info, title="グラフ"):
+    """
+    Excel上でダブルクリック＆自在に編集可能な「ネイティブグラフ」を作成して挿入
+    """
+    chart = BarChart()
+    chart.type = "col"
+    chart.style = 10
+    chart.title = title
+    chart.y_axis.title = "数値 / 度数"
+    chart.x_axis.title = "カテゴリ"
+    
+    # データ範囲とカテゴリ名（X軸）の参照
+    data_ref = Reference(ws, min_col=2, min_row=data_info["header_row"], max_col=data_info["num_cols"], max_row=data_info["data_end_row"])
+    cats_ref = Reference(ws, min_col=1, min_row=data_info["data_start_row"], max_row=data_info["data_end_row"])
+    
+    chart.add_data(data_ref, titles_from_data=True)
+    chart.set_categories(cats_ref)
+    
+    chart.width = 16
+    chart.height = 10
+    
+    ws.add_chart(chart, "H2")
 
 
 def add_image_to_sheet(ws, img_bytes, cell_location="H2"):
@@ -142,7 +164,8 @@ def add_image_to_sheet(ws, img_bytes, cell_location="H2"):
 
 def build_full_excel_report(analysis_results):
     """
-    複数の分析結果（辞書形式）を受け取り、オープンピクセルWorkbookを作成してBytesIOで返す
+    複数の分析結果（辞書形式）を受け取り、オープンピクセルWorkbookを作成してBytesIOで返す。
+    ネィティブ編集可能グラフと画像グラフの両方を埋め込み。
     """
     wb = openpyxl.Workbook()
     wb.remove(wb.active)  # デフォルトシート削除
@@ -160,12 +183,22 @@ def build_full_excel_report(analysis_results):
         note = item.get("note", None)
         fig_bytes = item.get("fig_bytes", None)
         
+        data_info = None
         if df is not None and not df.empty:
-            next_row = format_apa_table(ws, start_row=2, title=title, df=df, note=note, table_num=table_counter)
+            data_info, next_row = format_apa_table(ws, start_row=2, title=title, df=df, note=note, table_num=table_counter)
             table_counter += 1
+            
+            # 単純集計・クロス集計・記述統計量等の場合はExcelネイティブ編集可能チャートを追加
+            try:
+                if "単純集計" in sheet_name or "クロス" in sheet_name or "基本統計量" in sheet_name or "t検定" in sheet_name or "ANOVA" in sheet_name:
+                    add_native_excel_chart(ws, data_info, title=f"{title} (編集可能グラフ)")
+            except Exception:
+                pass  # 万が一ネイティブチャート作成不可時は画像フォールバック
         
         if fig_bytes is not None:
-            add_image_to_sheet(ws, fig_bytes, cell_location="H2")
+            # ネイティブグラフがある場合はその下（H18）に画像配置、ない場合はH2に配置
+            img_pos = "H18" if data_info and ("単純集計" in sheet_name or "クロス" in sheet_name or "基本統計量" in sheet_name or "t検定" in sheet_name or "ANOVA" in sheet_name) else "H2"
+            add_image_to_sheet(ws, fig_bytes, cell_location=img_pos)
             
     output = io.BytesIO()
     wb.save(output)
