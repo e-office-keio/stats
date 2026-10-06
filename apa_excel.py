@@ -279,8 +279,20 @@ def build_full_excel_report(analysis_results):
                 elif "クロス" in sheet_name:
                     # クロス度数表は画像グラフ(fig_bytes)を出力
                     pass
+                elif "信頼性" in sheet_name or "対応ありt" in sheet_name or "ロジスティック" in sheet_name:
+                    # これらは高品質Matplotlib画像グラフを挿入
+                    pass
             except Exception:
                 pass  # 万が一ネイティブチャート作成不可時は画像フォールバック
+        
+        # 補助テーブル (extra_df) がある場合は追加で書き込む (例: 二元配置ANOVAのセル別平均値表など)
+        extra_df = item.get("extra_df")
+        if extra_df is not None and not extra_df.empty:
+            extra_title = item.get("extra_title", "詳細統計量")
+            extra_start_row = next_row + 2
+            format_apa_table(ws, start_row=extra_start_row, title=extra_title, df=extra_df, note=None, table_num=table_counter)
+            table_counter += 1
+
         
         if fig_bytes is not None:
             # 編集可能ネイティブグラフが存在する場合は重複する画像グラフの挿入をスキップ

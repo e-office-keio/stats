@@ -94,6 +94,109 @@ def fig_to_bytes(fig):
 
 
 # ----------------------------------------------------------------------
+# 演習・検証用サンプルデータ生成機能 (各分析で有意差・明瞭な関係が出る構造)
+# ----------------------------------------------------------------------
+def generate_sample_dataset(n=150, seed=None):
+    """
+    統計演習・動作検証用の実践的サンプルデータを生成する。
+    t検定、一元/二元配置ANOVA、相関・回帰、ロジスティック回帰、因子分析、信頼性分析、
+    および前処理（逆転項目・特定値・欠損値）のすべてで明瞭な結果が出る設計。
+    """
+    if seed is not None:
+        np.random.seed(seed)
+        
+    # 1. 属性・グループ変数 (3群: 統制群, 講義群, 映像実験群)
+    n_per_grp = n // 3
+    groups = ["統制群"] * n_per_grp + ["講義群"] * n_per_grp + ["映像実験群"] * (n - n_per_grp * 2)
+    genders = np.random.choice(["男性", "女性"], size=n, p=[0.48, 0.52])
+    teaching_exp = np.random.choice(["指導経験あり", "指導経験なし"], size=n, p=[0.4, 0.6])
+    ages = np.random.randint(20, 65, size=n)
+    
+    # 2. 事前テスト得点 (平均50, SD 8)
+    pre_scores = np.random.normal(50.0, 8.0, size=n).round(1)
+    
+    # 3. 事後テスト得点 (群効果 + 指導経験との交互作用 + 個人差)
+    post_scores = []
+    for i in range(n):
+        grp = groups[i]
+        exp = teaching_exp[i]
+        pre = pre_scores[i]
+        
+        # 主効果
+        gain = 2.0 if grp == "統制群" else (8.0 if grp == "講義群" else 16.0)
+        # 交互作用: 映像群 × 指導経験ありでさらに大きな相乗効果
+        if grp == "映像実験群" and exp == "指導経験あり":
+            gain += 10.0
+        elif grp == "講義群" and exp == "指導経験あり":
+            gain += 3.0
+            
+        noise = np.random.normal(0, 3.0)
+        post_val = max(10.0, min(100.0, pre + gain + noise))
+        post_scores.append(round(post_val, 1))
+        
+    post_scores = np.array(post_scores)
+    
+    # 4. 学習満足度 (事後テストと相関 r ≈ 0.60)
+    satisfaction = 1.0 + 0.06 * post_scores + np.random.normal(0, 0.6, size=n)
+    satisfaction = np.clip(np.round(satisfaction, 1), 1.0, 7.0)
+    
+    # 5. 合格判定 (二項ロジスティック回帰用: 事後テスト得点が高いほど合格)
+    logit_prob = 1.0 / (1.0 + np.exp(-(post_scores - 60.0) / 6.0))
+    passed = (np.random.rand(n) < logit_prob).astype(int)
+    passed_labels = np.where(passed == 1, "合格", "不合格")
+    
+    # 6. 潜在因子1: 学習意欲 (F1) / 潜在因子2: 理解度 (F2)
+    f1 = np.random.normal(0, 1, size=n)
+    f2 = 0.4 * f1 + np.sqrt(1 - 0.4**2) * np.random.normal(0, 1, size=n)
+    
+    def make_likert(latent, mean=3.4):
+        raw = mean + 0.85 * latent + np.random.normal(0, 0.45, size=n)
+        return np.clip(np.round(raw), 1, 5).astype(int)
+        
+    q1 = make_likert(f1, 3.5)  # 関心の高まり
+    q2 = make_likert(f1, 3.3)  # 学習意欲の向上
+    q3 = make_likert(f1, 3.6)  # 探究心の刺激
+    q4 = make_likert(f2, 3.4)  # 内容の理解度
+    q5 = make_likert(f2, 3.2)  # 知識の定着度
+    q6 = make_likert(f2, 3.5)  # 応用力の実感
+    
+    # 逆転項目: 退屈さ (F1が高い人ほど低い点数)
+    q7_rev_raw = 3.2 - 0.85 * f1 + np.random.normal(0, 0.45, size=n)
+    q7_rev = np.clip(np.round(q7_rev_raw), 1, 5).astype(int)
+    
+    # 7. 演習用: 無効値 (-99) と 欠損値 (NaN) の適度な混入
+    q1_with_invalid = q1.astype(object)
+    q2_with_invalid = q2.astype(object)
+    for idx in [3, 17, 45]:
+        if idx < n:
+            q1_with_invalid[idx] = -99
+    for idx in [8, 29]:
+        if idx < n:
+            q2_with_invalid[idx] = np.nan
+            
+    df_sample = pd.DataFrame({
+        "被験者ID": range(1, n + 1),
+        "実験グループ": groups,
+        "性別": genders,
+        "指導経験": teaching_exp,
+        "年齢": ages,
+        "事前テスト得点": pre_scores,
+        "事後テスト得点": post_scores,
+        "合格判定": passed_labels,
+        "学習満足度": satisfaction,
+        "Q1_関心の高まり": q1_with_invalid,
+        "Q2_学習意欲の向上": q2_with_invalid,
+        "Q3_探究心の刺激": q3,
+        "Q4_内容の理解度": q4,
+        "Q5_知識の定着度": q5,
+        "Q6_応用力の実感": q6,
+        "Q7_退屈さ_逆転項目": q7_rev
+    })
+    
+    return df_sample
+
+
+# ----------------------------------------------------------------------
 # データ前処理・リコード・除外機能
 # ----------------------------------------------------------------------
 def filter_exclude_values(df, var_name, exclude_values):
@@ -101,6 +204,7 @@ def filter_exclude_values(df, var_name, exclude_values):
     new_df = df.copy()
     new_df = new_df[~new_df[var_name].isin(exclude_values)]
     return new_df
+
 
 def recode_values(df, target_var, mapping_dict, new_var_name=None):
     """既存変数の値をマッピング辞書に従って置換し新変数を作成"""
@@ -126,6 +230,128 @@ def create_composite_score(df, source_vars, func="mean", new_var_name="Composite
     else:
         new_df[new_var_name] = new_df[source_vars].sum(axis=1)
     return new_df, new_var_name
+
+def reverse_code_values(df, target_vars, min_val, max_val, suffix="_rev"):
+    """逆転項目の反転リコード (新値 = (min_val + max_val) - 旧値)"""
+    new_df = df.copy()
+    created_names = []
+    for var in target_vars:
+        new_name = f"{var}{suffix}"
+        new_df[new_name] = (min_val + max_val) - pd.to_numeric(new_df[var], errors='coerce')
+        created_names.append(new_name)
+    return new_df, created_names
+
+def standardize_normalize_variables(df, target_vars, method="standardize", suffix=None):
+    """変数の標準化 (Zスコア) または 正規化 (0-1 Min-Max)"""
+    new_df = df.copy()
+    created_names = []
+    if suffix is None:
+        suffix = "_z" if method == "standardize" else "_norm"
+        
+    for var in target_vars:
+        new_name = f"{var}{suffix}"
+        s = pd.to_numeric(new_df[var], errors='coerce')
+        if method == "standardize":
+            mean_val = s.mean()
+            std_val = s.std()
+            new_df[new_name] = (s - mean_val) / std_val if std_val != 0 else 0.0
+        elif method == "normalize":
+            min_val = s.min()
+            max_val = s.max()
+            new_df[new_name] = (s - min_val) / (max_val - min_val) if max_val != min_val else 0.0
+        created_names.append(new_name)
+    return new_df, created_names
+
+def handle_missing_values(df, strategy="listwise", target_vars=None, fill_val=None):
+    """欠損値の処理（リストワイズ削除、平均値・中央値・最頻値・定数補完）"""
+    new_df = df.copy()
+    if not target_vars:
+        target_vars = list(new_df.columns)
+        
+    if strategy == "listwise":
+        new_df = new_df.dropna(subset=target_vars)
+    elif strategy == "mean":
+        for var in target_vars:
+            if pd.api.types.is_numeric_dtype(new_df[var]):
+                new_df[var] = new_df[var].fillna(new_df[var].mean())
+    elif strategy == "median":
+        for var in target_vars:
+            if pd.api.types.is_numeric_dtype(new_df[var]):
+                new_df[var] = new_df[var].fillna(new_df[var].median())
+    elif strategy == "mode":
+        for var in target_vars:
+            mode_val = new_df[var].mode()
+            if not mode_val.empty:
+                new_df[var] = new_df[var].fillna(mode_val.iloc[0])
+    elif strategy == "constant":
+        for var in target_vars:
+            new_df[var] = new_df[var].fillna(fill_val)
+            
+    return new_df
+
+def filter_advanced(df, conditions, logic="AND"):
+    """
+    複数条件による高度なデータ抽出
+    conditions: list of tuples (column, operator, value)
+    operator: '==', '!=', '>', '>=', '<', '<=', 'contains', 'in'
+    """
+    if not conditions:
+        return df.copy()
+    
+    masks = []
+    for col, op, val in conditions:
+        series = df[col]
+        if op == "==":
+            # 型変換を試みる
+            try:
+                num_val = float(val)
+                mask = (pd.to_numeric(series, errors='coerce') == num_val) | (series.astype(str) == str(val))
+            except ValueError:
+                mask = series.astype(str) == str(val)
+        elif op == "!=":
+            try:
+                num_val = float(val)
+                mask = (pd.to_numeric(series, errors='coerce') != num_val) & (series.astype(str) != str(val))
+            except ValueError:
+                mask = series.astype(str) != str(val)
+        elif op == ">":
+            mask = pd.to_numeric(series, errors='coerce') > float(val)
+        elif op == ">=":
+            mask = pd.to_numeric(series, errors='coerce') >= float(val)
+        elif op == "<":
+            mask = pd.to_numeric(series, errors='coerce') < float(val)
+        elif op == "<=":
+            mask = pd.to_numeric(series, errors='coerce') <= float(val)
+        elif op == "contains":
+            mask = series.astype(str).str.contains(str(val), na=False)
+        elif op == "in":
+            vals = [v.strip() for v in str(val).split(",")]
+            mask = series.astype(str).isin(vals)
+        else:
+            mask = pd.Series(True, index=df.index)
+        masks.append(mask)
+        
+    if logic == "AND":
+        final_mask = masks[0]
+        for m in masks[1:]:
+            final_mask = final_mask & m
+    else:  # OR
+        final_mask = masks[0]
+        for m in masks[1:]:
+            final_mask = final_mask | m
+            
+    return df[final_mask].copy()
+
+def create_dummy_variables(df, target_var, drop_first=False, prefix=None):
+    """カテゴリ変数のダミー変数化 (One-Hot Encoding)"""
+    new_df = df.copy()
+    if prefix is None:
+        prefix = target_var
+    dummies = pd.get_dummies(new_df[target_var], prefix=prefix, drop_first=drop_first, dtype=int)
+    dummy_cols = list(dummies.columns)
+    new_df = pd.concat([new_df, dummies], axis=1)
+    return new_df, dummy_cols
+
 
 
 # ----------------------------------------------------------------------
@@ -389,7 +615,7 @@ def analyze_anova(df, group_var, num_var):
     tukey_df = tukey_df.set_index(["グループ1", "グループ2"])
     
     fig, ax = plt.subplots(figsize=(6, 4))
-    sns.barplot(data=clean_df, x=group_var, y=num_var, ax=ax, capsize=0.1, palette="Blues_d", edgecolor="black")
+    sns.barplot(data=clean_df, x=group_var, y=num_var, hue=group_var, ax=ax, capsize=0.1, palette="Blues_d", edgecolor="black", legend=False)
     ax.set_title(f"一元配置分散分析: {group_var} × {num_var}")
     ax.set_xlabel(str(group_var))
     ax.set_ylabel(str(num_var))
@@ -551,24 +777,53 @@ def analyze_factor_analysis(df, num_vars, n_factors=2, rotation="promax"):
             columns=factor_cols
         )
         
-    except ImportError:
+    except Exception:
+        # factor_analyzer の非互換性またはインポート失敗時の堅牢なPCAフォールバック
         from sklearn.decomposition import PCA
-        pca = PCA(n_components=n_factors)
-        pca.fit((clean_df - clean_df.mean()) / clean_df.std())
+        scaler_df = (clean_df - clean_df.mean()) / clean_df.std(ddof=0)
+        pca = PCA(n_components=min(len(num_vars), n_factors))
+        pca.fit(scaler_df)
+        
+        # 因子負荷量 (PCA成分 × 各主成分の標準偏差)
+        raw_loadings = pca.components_.T * np.sqrt(pca.explained_variance_)
+        
+        # 単純バリマックス回転 (直交回転アルゴリズム)
+        if rotation in ["varimax", "promax"] and raw_loadings.shape[1] > 1:
+            gamma = 1.0
+            q, r = np.linalg.qr(raw_loadings)
+            x = raw_loadings
+            for _ in range(50):
+                d = np.diag(np.sum(x**2, axis=0))
+                u, s, vh = np.linalg.svd(x.T @ (x**3 - (gamma / x.shape[0]) * (x @ d)))
+                rot_matrix = u @ vh
+                x = raw_loadings @ rot_matrix
+            raw_loadings = x
+            
         loadings = pd.DataFrame(
-            pca.components_.T,
+            raw_loadings,
             index=num_vars,
-            columns=factor_cols
+            columns=factor_cols[:raw_loadings.shape[1]]
         )
-        ev = pca.explained_variance_
+        
+        # 全固有値の計算
+        cov_mat = np.cov(scaler_df.T)
+        ev = np.real(np.sort(np.linalg.eigvals(cov_mat))[::-1])
+        
+        # 分散説明率
+        ss_loadings = np.sum(raw_loadings**2, axis=0)
+        prop_var = ss_loadings / len(num_vars)
+        cum_var = np.cumsum(prop_var)
+        
         variance_df = pd.DataFrame([
-            pca.explained_variance_,
-            pca.explained_variance_ratio_,
-            np.cumsum(pca.explained_variance_ratio_)
-        ], index=["固有値", "分散説明率 (寄与率)", "累積分散説明率 (累積寄与率)"], columns=factor_cols)
+            ss_loadings,
+            prop_var,
+            cum_var
+        ], index=["因子負荷量二乗和", "分散説明率 (寄与率)", "累積分散説明率 (累積寄与率)"], columns=factor_cols[:raw_loadings.shape[1]])
 
+
+    ev_real = np.real(ev)
     fig, ax = plt.subplots(figsize=(6, 4))
-    ax.plot(range(1, len(ev) + 1), ev, marker='o', color='#2b5c8f', linewidth=2)
+    ax.plot(range(1, len(ev_real) + 1), ev_real, marker='o', color='#2b5c8f', linewidth=2)
     ax.axhline(1.0, color='red', linestyle='--', label='カイザー基準 (固有値 = 1.0)')
     ax.set_title("スクリープロット (固有値の推移)")
     ax.set_xlabel("因子番号")
@@ -582,3 +837,306 @@ def analyze_factor_analysis(df, num_vars, n_factors=2, rotation="promax"):
     
     combined_df = pd.concat([loadings, variance_df], axis=0)
     return combined_df, note, fig_bytes
+
+
+# ----------------------------------------------------------------------
+# 9. 尺度信頼性分析 (Cronbach's Alpha)
+# ----------------------------------------------------------------------
+def analyze_reliability(df, num_vars):
+    """尺度信頼性分析 (クロンバックのα係数 & 項目削除時α & 項目-全体相関)"""
+    set_apa_plot_style()
+    clean_df = df[num_vars].dropna()
+    k = len(num_vars)
+    n = len(clean_df)
+    if k < 2:
+        raise ValueError("信頼性分析には2つ以上の数値変数を指定してください。")
+    if n < 3:
+        raise ValueError("有効サンプルサイズが不足しています (N >= 3)。")
+        
+    item_vars = clean_df.var(axis=0, ddof=1)
+    total_score = clean_df.sum(axis=1)
+    total_var = total_score.var(ddof=1)
+    alpha = (k / (k - 1)) * (1 - item_vars.sum() / total_var) if total_var > 0 else 0.0
+    
+    records = []
+    for var in num_vars:
+        s = clean_df[var]
+        other_vars = [v for v in num_vars if v != var]
+        scale_without = clean_df[other_vars].sum(axis=1)
+        r, _ = stats.pearsonr(s, scale_without) if scale_without.std() > 0 and s.std() > 0 else (0.0, 1.0)
+        
+        k_sub = len(other_vars)
+        if k_sub >= 2:
+            sub_vars = clean_df[other_vars].var(axis=0, ddof=1)
+            sub_tot_var = scale_without.var(ddof=1)
+            sub_alpha = (k_sub / (k_sub - 1)) * (1 - sub_vars.sum() / sub_tot_var) if sub_tot_var > 0 else 0.0
+        else:
+            sub_alpha = np.nan
+            
+        records.append({
+            "項目名": var,
+            "平均値 (M)": s.mean(),
+            "標準偏差 (SD)": s.std(),
+            "修正項目-全体相関 (r)": r,
+            "項目削除時 α": sub_alpha
+        })
+        
+    res_df = pd.DataFrame(records).set_index("項目名")
+    
+    # プロット: 項目削除時アルファの棒グラフと全体アルファ基準線
+    fig, ax = plt.subplots(figsize=(6, max(3.5, k * 0.45)))
+    y_pos = np.arange(k)
+    alpha_dels = [r["項目削除時 α"] for r in records]
+    ax.barh(y_pos, alpha_dels, color="#2b5c8f", edgecolor="black", height=0.55)
+    ax.axvline(alpha, color="red", linestyle="--", linewidth=1.5, label=f"全体 α = {alpha:.3f}")
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(num_vars)
+    ax.invert_yaxis()
+    ax.set_xlabel("項目削除時のクロンバックのα係数")
+    ax.set_title(f"尺度信頼性プロット (全体 α = {alpha:.3f}, k = {k})")
+    ax.set_xlim(0, 1.0)
+    ax.legend(loc="lower right")
+    plt.tight_layout()
+    fig_bytes = fig_to_bytes(fig)
+    
+    note = f"注. 全体尺度 (k = {k}): クロンバックの α = {alpha:.3f}, 平均合計得点 = {total_score.mean():.2f} (SD = {total_score.std():.2f}), サンプルサイズ N = {n}。"
+    return res_df, note, fig_bytes, alpha
+
+
+# ----------------------------------------------------------------------
+# 10. 対応のあるt検定 (Paired Samples t-Test)
+# ----------------------------------------------------------------------
+def analyze_paired_ttest(df, var1, var2):
+    """対応のある2群の平均値の差の検定 (同一被験者の前後比較など)"""
+    set_apa_plot_style()
+    clean_df = df[[var1, var2]].dropna()
+    n = len(clean_df)
+    if n < 2:
+        raise ValueError("対応のあるt検定には少なくとも2サンプル以上必要です。")
+        
+    s1 = clean_df[var1]
+    s2 = clean_df[var2]
+    m1, sd1 = s1.mean(), s1.std()
+    m2, sd2 = s2.mean(), s2.std()
+    
+    diff = s1 - s2
+    m_diff = diff.mean()
+    sd_diff = diff.std()
+    se_diff = sd_diff / np.sqrt(n) if n > 0 else 0.0
+    
+    res = stats.ttest_rel(s1, s2)
+    t_val = float(res.statistic)
+    p_val = float(res.pvalue)
+    df_val = n - 1
+    
+    # Cohen's d_z (差の標準偏差で標準化)
+    cohens_dz = float(m_diff / sd_diff) if sd_diff != 0 else 0.0
+    
+    tt_df = pd.DataFrame([{
+        "比較項目": f"{var1} vs. {var2}",
+        f"{var1} M (SD)": f"{m1:.2f} ({sd1:.2f})",
+        f"{var2} M (SD)": f"{m2:.2f} ({sd2:.2f})",
+        "差の平均 (M_diff)": m_diff,
+        "差の標準偏差 (SD_diff)": sd_diff,
+        "t値": t_val,
+        "自由度 (df)": df_val,
+        "p値": p_val,
+        "効果量 (d_z)": cohens_dz
+    }]).set_index("比較項目")
+    
+    fig, ax = plt.subplots(figsize=(5, 4))
+    means = [m1, m2]
+    errors = [1.96 * sd1 / np.sqrt(n), 1.96 * sd2 / np.sqrt(n)]
+    labels = [str(var1), str(var2)]
+    
+    ax.plot([0, 1], means, marker='o', markersize=8, color='#2b5c8f', linewidth=2, label="平均値の推移")
+    ax.errorbar([0, 1], means, yerr=errors, fmt='none', ecolor='#2b5c8f', capsize=5, capthick=1.5)
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("平均値 (95% CI)")
+    ax.set_title(f"対応のある比較: {var1} と {var2}")
+    ax.set_xlim(-0.3, 1.3)
+    plt.tight_layout()
+    fig_bytes = fig_to_bytes(fig)
+    
+    p_str = "< .001" if p_val < 0.001 else f"= {p_val:.3f}"
+    note = f"注. 対応のあるt検定: t({df_val}) = {t_val:.2f}, p {p_str}, Cohen's d_z = {cohens_dz:.2f}。サンプルサイズ N = {n}。"
+    return tt_df, note, fig_bytes
+
+
+# ----------------------------------------------------------------------
+# 11. 二元配置分散分析 (Two-way ANOVA)
+# ----------------------------------------------------------------------
+def analyze_two_way_anova(df, factor1, factor2, dep_var):
+    """二元配置分散分析 (主効果・交互作用・セル別平均値・交互作用プロット)"""
+    set_apa_plot_style()
+    clean_df = df[[factor1, factor2, dep_var]].dropna().copy()
+    clean_df[factor1] = clean_df[factor1].astype(str)
+    clean_df[factor2] = clean_df[factor2].astype(str)
+    
+    # セル別記述統計量テーブル (因子1 × 因子2)
+    cell_means = clean_df.groupby([factor1, factor2])[dep_var].mean().unstack(level=1)
+    cell_sds = clean_df.groupby([factor1, factor2])[dep_var].std().unstack(level=1)
+    
+    cell_desc = pd.DataFrame(index=cell_means.index, columns=cell_means.columns)
+    for r in cell_means.index:
+        for c in cell_means.columns:
+            m = cell_means.loc[r, c]
+            sd = cell_sds.loc[r, c]
+            if pd.notna(m):
+                cell_desc.loc[r, c] = f"{m:.2f} ({sd:.2f})"
+            else:
+                cell_desc.loc[r, c] = "-"
+    cell_desc.index.name = f"{factor1} \\ {factor2}"
+    
+    # statsmodels formula OLS & Type 2 ANOVA
+    import statsmodels.formula.api as smf
+    from statsmodels.stats.anova import anova_lm
+    
+    formula = f"Q('{dep_var}') ~ C(Q('{factor1}')) + C(Q('{factor2}')) + C(Q('{factor1}')):C(Q('{factor2}'))"
+    model = smf.ols(formula, data=clean_df).fit()
+    anova_table = anova_lm(model, typ=2)
+    
+    ss_resid = anova_table.loc['Residual', 'sum_sq']
+    df_resid = anova_table.loc['Residual', 'df']
+    
+    records = []
+    source_map = {
+        f"C(Q('{factor1}'))": f"{factor1} (主効果)",
+        f"C(Q('{factor2}'))": f"{factor2} (主効果)",
+        f"C(Q('{factor1}')):C(Q('{factor2}'))": f"{factor1} × {factor2} (交互作用)",
+        "Residual": "残差 (誤差)"
+    }
+    
+    for term, label in source_map.items():
+        if term in anova_table.index:
+            row = anova_table.loc[term]
+            ss = row['sum_sq']
+            df_k = int(row['df'])
+            ms = ss / df_k if df_k > 0 else np.nan
+            f_val = row.get('F', np.nan)
+            p_val = row.get('PR(>F)', np.nan)
+            
+            # 部分イータ二乗 partial eta squared = SS_effect / (SS_effect + SS_residual)
+            partial_eta2 = (ss / (ss + ss_resid)) if term != "Residual" and (ss + ss_resid) > 0 else np.nan
+            
+            records.append({
+                "要因 / 変動因": label,
+                "平方和 (SS)": ss,
+                "自由度 (df)": df_k,
+                "平均平方 (MS)": ms,
+                "F値": f_val,
+                "p値": p_val,
+                "部分イータ二乗 (ηp²)": partial_eta2
+            })
+            
+    anova_df = pd.DataFrame(records).set_index("要因 / 変動因")
+    
+    # 交互作用プロット
+    fig, ax = plt.subplots(figsize=(6.5, 4.5))
+    sns.pointplot(data=clean_df, x=factor1, y=dep_var, hue=factor2, ax=ax,
+                  capsize=0.1, markers=['o', 's', '^', 'D', 'v'][:len(clean_df[factor2].unique())],
+                  linestyles=['-', '--', '-.', ':'][:len(clean_df[factor2].unique())],
+                  palette="tab10", err_kws={'linewidth': 1.5})
+    ax.set_title(f"二元配置分散分析 交互作用プロット ({factor1} × {factor2})")
+    ax.set_xlabel(str(factor1))
+    ax.set_ylabel(f"{dep_var} の平均値 (95% CI)")
+    ax.legend(title=str(factor2), bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    fig_bytes = fig_to_bytes(fig)
+    
+    note = f"注. 従属変数: {dep_var}。二元配置分散分析 (Type II 平方和)。残差 df = {int(df_resid)}。総サンプルサイズ N = {len(clean_df)}。"
+    return anova_df, cell_desc, note, fig_bytes
+
+
+# ----------------------------------------------------------------------
+# 12. 二項ロジスティック回帰分析 (Binary Logistic Regression)
+# ----------------------------------------------------------------------
+def analyze_logistic_regression(df, target_var, feature_vars):
+    """二項ロジスティック回帰分析 (オッズ比・95%CI・モデル適合度・フォレストプロット)"""
+    set_apa_plot_style()
+    clean_df = df[[target_var] + feature_vars].dropna()
+    unique_vals = clean_df[target_var].unique()
+    if len(unique_vals) != 2:
+        raise ValueError(f"ロジスティック回帰の目的変数は二値 (2カテゴリ) である必要があります。現在のカテゴリ数: {len(unique_vals)}")
+        
+    sorted_vals = sorted(unique_vals, key=lambda x: str(x))
+    val_0, val_1 = sorted_vals[0], sorted_vals[1]
+    val_map = {val_0: 0, val_1: 1}
+    y = clean_df[target_var].map(val_map).astype(int)
+    X = clean_df[feature_vars].apply(pd.to_numeric, errors='coerce')
+    
+    valid_idx = X.dropna().index
+    y = y.loc[valid_idx]
+    X = X.loc[valid_idx]
+    n_sample = len(y)
+    
+    X_const = sm.add_constant(X)
+    model = sm.Logit(y, X_const).fit(disp=False)
+    
+    # 係数・オッズ比の集計
+    params = model.params
+    bse = model.bse
+    zvalues = model.tvalues
+    pvalues = model.pvalues
+    conf = model.conf_int()
+    
+    records = []
+    # 切片
+    records.append({
+        "要因 / 変数名": f"切片 (基準: {val_0} vs 予測: {val_1})",
+        "回帰係数 (B)": params["const"],
+        "標準誤差 (SE)": bse["const"],
+        "z値 (Wald)": zvalues["const"],
+        "p値": pvalues["const"],
+        "オッズ比 (OR)": np.exp(params["const"]),
+        "95% CI 下限": np.exp(conf.loc["const", 0]),
+        "95% CI 上限": np.exp(conf.loc["const", 1])
+    })
+    
+    for var in feature_vars:
+        records.append({
+            "要因 / 変数名": var,
+            "回帰係数 (B)": params[var],
+            "標準誤差 (SE)": bse[var],
+            "z値 (Wald)": zvalues[var],
+            "p値": pvalues[var],
+            "オッズ比 (OR)": np.exp(params[var]),
+            "95% CI 下限": np.exp(conf.loc[var, 0]),
+            "95% CI 上限": np.exp(conf.loc[var, 1])
+        })
+        
+    res_df = pd.DataFrame(records).set_index("要因 / 変数名")
+    
+    # フォレストプロット (説明変数のオッズ比と95% CI)
+    fig, ax = plt.subplots(figsize=(6, max(3.5, len(feature_vars) * 0.6)))
+    y_pos = np.arange(len(feature_vars))
+    ors = [np.exp(params[v]) for v in feature_vars]
+    or_lowers = [np.exp(conf.loc[v, 0]) for v in feature_vars]
+    or_uppers = [np.exp(conf.loc[v, 1]) for v in feature_vars]
+    
+    err_left = [ors[i] - or_lowers[i] for i in range(len(feature_vars))]
+    err_right = [or_uppers[i] - ors[i] for i in range(len(feature_vars))]
+    
+    ax.errorbar(ors, y_pos, xerr=[err_left, err_right], fmt='o', color='#2b5c8f', ecolor='#2b5c8f', elinewidth=2, capsize=4, capthick=1.5, markersize=7)
+    ax.axvline(1.0, color="red", linestyle="--", linewidth=1.2, label="OR = 1.0 (無効果)")
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(feature_vars)
+    ax.invert_yaxis()
+    ax.set_xlabel("オッズ比 (OR) [対数目盛 / 95% CI]")
+    ax.set_title(f"ロジスティック回帰 フォレストプロット ({target_var})")
+    ax.set_xscale("log")
+    ax.legend(loc="lower right")
+    plt.tight_layout()
+    fig_bytes = fig_to_bytes(fig)
+    
+    # 適合度指標
+    prsquared = model.prsquared  # McFadden's pseudo R^2
+    llf = model.llf
+    aic = model.aic
+    llr_p = model.llr_pvalue
+    llr_p_str = "< .001" if llr_p < 0.001 else f"= {llr_p:.3f}"
+    
+    note = f"注. 目的変数: {target_var} (1 = '{val_1}', 0 = '{val_0}')。McFadden's 疑似R² = {prsquared:.3f}, モデルカイ二乗検定: χ² = {model.llr:.2f}, p {llr_p_str}, AIC = {aic:.2f}, サンプルサイズ N = {n_sample}。"
+    return res_df, note, fig_bytes
+
