@@ -37,18 +37,21 @@ def setup_japanese_font():
         plt.rcParams['axes.unicode_minus'] = False
         return
 
-    # japanize_matplotlib がない場合のOS別フォールバック
+    # japanize_matplotlib がない場合のOS別フォールバック (実際にシステムに存在するフォントのみ設定)
     system_fonts = [f.name for f in fm.fontManager.ttflist]
     candidates = [
-        'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 
-        'Meiryo', 'TakaoPGothic', 'IPAexGothic', 'IPAGothic', 
+        'IPAexGothic', 'IPAGothic', 'TakaoPGothic',
+        'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Meiryo',
         'DejaVu Sans'
     ]
+    matched_font = 'sans-serif'
     for font in candidates:
         if font in system_fonts:
-            plt.rcParams['font.family'] = font
+            matched_font = font
             break
             
+    plt.rcParams['font.family'] = matched_font
+    plt.rcParams['font.sans-serif'] = [matched_font, 'DejaVu Sans', 'sans-serif']
     plt.rcParams['axes.unicode_minus'] = False
 
 setup_japanese_font()
@@ -56,12 +59,13 @@ setup_japanese_font()
 def set_apa_plot_style():
     """APA形式のグラフスタイルを設定"""
     setup_japanese_font()
-    font_name = plt.rcParams.get('font.family', ['sans-serif'])
+    font_name = 'IPAexGothic' if HAS_JAPANIZE else plt.rcParams.get('font.family', ['sans-serif'])
     if isinstance(font_name, list):
         font_name = font_name[0]
         
     plt.rcParams.update({
         'font.family': font_name,
+        'font.sans-serif': [font_name, 'DejaVu Sans', 'sans-serif'],
         'font.size': 11,
         'axes.labelsize': 11,
         'axes.titlesize': 12,
