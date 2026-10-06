@@ -127,7 +127,7 @@ def format_apa_table(ws, start_row, title, df, note=None, table_num=1):
     return data_info, current_row
 
 
-def add_native_excel_chart(ws, data_info, title="グラフ", max_col=None, y_title="度数 / 数値"):
+def add_native_excel_chart(ws, data_info, title="グラフ", min_col=2, max_col=None, max_row=None, y_title="度数 / 数値", x_title="カテゴリ / グループ", gap_width=None):
     """
     Excel上でダブルクリック＆自在に編集可能な「ネイティブグラフ」を作成して挿入
     """
@@ -136,14 +136,18 @@ def add_native_excel_chart(ws, data_info, title="グラフ", max_col=None, y_tit
     chart.style = 10
     chart.title = title
     chart.y_axis.title = y_title
-    chart.x_axis.title = "カテゴリ"
+    chart.x_axis.title = x_title
     chart.legend = None  # 1列のみ表示時は凡例不要でスッキリ
+    if gap_width is not None:
+        chart.gapWidth = gap_width
     
+    target_min_col = min_col
     target_max_col = max_col if max_col is not None else data_info["num_cols"]
+    target_max_row = max_row if max_row is not None else data_info["data_end_row"]
     
     # データ範囲とカテゴリ名（X軸）の参照
-    data_ref = Reference(ws, min_col=2, min_row=data_info["header_row"], max_col=target_max_col, max_row=data_info["data_end_row"])
-    cats_ref = Reference(ws, min_col=1, min_row=data_info["data_start_row"], max_row=data_info["data_end_row"])
+    data_ref = Reference(ws, min_col=target_min_col, min_row=data_info["header_row"], max_col=target_max_col, max_row=target_max_row)
+    cats_ref = Reference(ws, min_col=1, min_row=data_info["data_start_row"], max_row=target_max_row)
     
     chart.add_data(data_ref, titles_from_data=True)
     chart.set_categories(cats_ref)
@@ -196,20 +200,61 @@ def build_full_excel_report(analysis_results):
             data_info, next_row = format_apa_table(ws, start_row=2, title=title, df=df, note=note, table_num=table_counter)
             table_counter += 1
             
-            # 単純集計の場合は「度数 (N)」のみ(max_col=2)を対象にした編集可能グラフを作成
             try:
                 if "単純集計" in sheet_name:
-                    add_native_excel_chart(ws, data_info, title=f"{title}", max_col=2, y_title="度数 (N)")
+                    add_native_excel_chart(ws, data_info, title=f"{title}", min_col=2, max_col=2, y_title="度数 (N)", x_title="カテゴリ")
                     has_native_chart = True
-                elif "クロス" in sheet_name or "基本統計量" in sheet_name or "t検定" in sheet_name or "ANOVA" in sheet_name:
+                elif "分布_" in sheet_name or "ヒストグラム" in sheet_name:
+                    add_native_excel_chart(ws, data_info, title=f"{title}", min_col=2, max_col=2, y_title="度数 (N)", x_title="階級 (区間)", gap_width=10)
+                    has_native_chart = True
+                elif "基本統計量" in sheet_name:
+                    pass
+                elif "t検定" in sheet_name or "分散分析" in sheet_name:
+                    m_sd_cols = [c for c in df.columns if "M (SD)" in str(c)]
+                    if m_sd_cols:
+                        chart_start_row = data_info["data_end_row"] + 4
+                        ws.cell(row=chart_start_row - 1, column=1, value="[ グラフ生成用数値データ (平均値) ]").font = Font(name="游ゴシック", size=10, bold=True, italic=True)
+                        
+                        ws.cell(row=chart_start_row, column=1, value="従属変数")
+                        for idx, col_name in enumerate(m_sd_cols, start=2):
+                            clean_grp_name = str(col_name).replace(" M (SD)", "")
+                            ws.cell(row=chart_start_row, column=idx, value=clean_grp_name)
+                            
+                        for r_offset, (dep_var, row) in enumerate(df.iterrows(), start=1):
+                            curr_r = chart_start_row + r_offset
+                            ws.cell(row=curr_r, column=1, value=str(dep_var))
+                            for c_offset, col_name in enumerate(m_sd_cols, start=2):
+                                val_str = str(row[col_name])
+                                try:
+                                    mean_val = float(val_str.split("(")[0].strip())
+                                    ws.cell(row=curr_r, column=c_offset, value=mean_val)
+                                except Exception:
+                                    ws.cell(row=curr_r, column=c_offset, value=0.0)
+                                    
+                        chart_end_row = chart_start_row + len(df)
+                        chart_num_cols = len(m_sd_cols) + 1
+                        
+                        chart_data_info = {
+                            "header_row": chart_start_row,
+                            "data_start_row": chart_start_row + 1,
+                            "data_end_row": chart_end_row,
+                            "num_cols": chart_num_cols
+                        }
+                        add_native_excel_chart(
+                            ws, chart_data_info, title=f"{title}",
+                            min_col=2, max_col=chart_num_cols,
+                            y_title="平均値 (M)", x_title="従属変数"
+                        )
+                        has_native_chart = True
+                elif "クロス" in sheet_name:
                     add_native_excel_chart(ws, data_info, title=f"{title}")
                     has_native_chart = True
             except Exception:
                 pass  # 万が一ネイティブチャート作成不可時は画像フォールバック
         
         if fig_bytes is not None:
-            # 単純集計で編集可能ネイティブグラフが存在する場合は重複する画像グラフの挿入をスキップ
-            if "単純集計" in sheet_name and has_native_chart:
+            # 編集可能ネイティブグラフが存在する場合は重複する画像グラフの挿入をスキップ
+            if ("単純集計" in sheet_name or "分布_" in sheet_name or "ヒストグラム" in sheet_name or "t検定" in sheet_name or "分散分析" in sheet_name) and has_native_chart:
                 pass
             else:
                 img_pos = "H18" if has_native_chart else "H2"
