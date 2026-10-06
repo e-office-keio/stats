@@ -1,6 +1,6 @@
 """
 APA Style Statistical Analysis Web Application using Streamlit.
-(Features: Scrollable Plot Containers, Action Buttons on Top, Japanese Interface)
+(Features: Instant Sidebar Refresh on Queue Add, Scrollable Plot Containers, Japanese Interface)
 """
 
 import io
@@ -310,7 +310,6 @@ def main():
         if "freq" in st.session_state["results"]:
             res = st.session_state["results"]["freq"]
             
-            # 追加ボタンを上部に配置してスクロールなしで即追加可能に
             if st.button("➕ この結果をExcelレポートに追加", key="btn_add_freq"):
                 st.session_state["analysis_queue"].append({
                     "sheet_name": f"単純集計_{res['target_var']}",
@@ -320,6 +319,7 @@ def main():
                     "fig_bytes": res["fig_bytes"]
                 })
                 st.toast(f"『単純集計_{res['target_var']}』をレポートリストに追加しました！", icon="📋")
+                st.rerun()
 
             c1, c2 = st.columns([2.2, 2])
             with c1:
@@ -352,7 +352,6 @@ def main():
         if "desc" in st.session_state["results"]:
             res = st.session_state["results"]["desc"]
             
-            # 【重要】追加ボタンを結果の上部に配置
             if st.button("➕ この結果をExcelレポートに追加", key="btn_add_desc"):
                 st.session_state["analysis_queue"].append({
                     "sheet_name": "基本統計量",
@@ -362,6 +361,7 @@ def main():
                     "fig_bytes": res["fig_bytes"]
                 })
                 st.toast("『基本統計量』をレポートリストに追加しました！", icon="📋")
+                st.rerun()
 
             c1, c2 = st.columns([2.5, 2])
             with c1:
@@ -370,7 +370,6 @@ def main():
                 st.caption(res["note"])
             with c2:
                 st.write("**分布プロット (スクロール表示)**")
-                # スクロール可能コンテナで縦長プロットも画面外へはみ出さない
                 with st.container(height=480):
                     st.image(res["fig_bytes"], use_container_width=True)
 
@@ -406,6 +405,7 @@ def main():
                     "fig_bytes": res["fig_bytes"]
                 })
                 st.toast("『クロス集計結果』をレポートリストに追加しました！", icon="📋")
+                st.rerun()
 
             col_left, col_right = st.columns([2.5, 2])
             with col_left:
@@ -455,6 +455,7 @@ def main():
                     "fig_bytes": res["fig_bytes"]
                 })
                 st.toast("『t検定結果』をレポートリストに追加しました！", icon="📋")
+                st.rerun()
 
             col_left, col_right = st.columns([2.5, 2])
             with col_left:
@@ -505,6 +506,7 @@ def main():
                     "note": "注. 有意水準 alpha = .05 におけるTukeyのHSD検定結果。"
                 })
                 st.toast("『分散分析 & 多重比較結果』をレポートリストに追加しました！", icon="📋")
+                st.rerun()
 
             c_l, c_r = st.columns([2.5, 2])
             with c_l:
@@ -554,6 +556,7 @@ def main():
                     "fig_bytes": res["fig_bytes"]
                 })
                 st.toast("『相関係数行列』をレポートリストに追加しました！", icon="📋")
+                st.rerun()
 
             c_l, c_r = st.columns([2.5, 2])
             method_jp = "ピアソン" if res["corr_method"] == "pearson" else "スピアマン"
@@ -601,6 +604,7 @@ def main():
                     "fig_bytes": res["fig_bytes"]
                 })
                 st.toast("『重回帰分析結果』をレポートリストに追加しました！", icon="📋")
+                st.rerun()
 
             c_l, c_r = st.columns([2.5, 2])
             with c_l:
@@ -649,6 +653,7 @@ def main():
                     "fig_bytes": res["fig_bytes"]
                 })
                 st.toast("『因子分析結果』をレポートリストに追加しました！", icon="📋")
+                st.rerun()
 
             c_l, c_r = st.columns([2.5, 2])
             with c_l:
