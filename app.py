@@ -118,10 +118,13 @@ def main():
         st.divider()
         with st.expander("🛠 日本語フォント診断 (Streamlit Cloud確認用)"):
             has_jap = getattr(stats_engine, "HAS_JAPANIZE", False)
+            jap_err = getattr(stats_engine, "JAPANIZE_ERROR", "")
             if has_jap:
                 st.success("✅ `japanize-matplotlib` 読み込み成功")
             else:
-                st.error("❌ `japanize-matplotlib` 未適用 (再構築またはキャッシュクリアが必要です)")
+                st.error("❌ `japanize-matplotlib` 未適用")
+                if jap_err:
+                    st.code(f"エラー詳細: {jap_err}", language="text")
                 
             import matplotlib.pyplot as plt
             current_font = plt.rcParams.get("font.family", ["不明"])

@@ -19,11 +19,12 @@ import seaborn as sns
 
 # japanize_matplotlib を最優先適用 (完全文字化け防止)
 HAS_JAPANIZE = False
+JAPANIZE_ERROR = ""
 try:
     import japanize_matplotlib
     HAS_JAPANIZE = True
-except ImportError:
-    pass
+except Exception as e:
+    JAPANIZE_ERROR = f"{type(e).__name__}: {str(e)}"
 
 def setup_japanese_font():
     """環境に合わせた日本語フォントの設定"""
