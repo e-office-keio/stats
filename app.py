@@ -59,6 +59,20 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+def is_id_like_column(col_name, series=None):
+    """ID列・被験者番号・インデックス列などを判定してデフォルト選択から除外"""
+    col_str = str(col_name).lower().strip()
+    id_keywords = ["id", "被験者", "参加者", "番号", "no.", "no", "連番", "コード", "index", "氏名", "名前"]
+    for kw in id_keywords:
+        if kw in col_str:
+            return True
+    if series is not None and len(series.dropna()) > 0:
+        # ユニーク数がサンプル数と等しく、かつ数値の昇順などの場合
+        if series.nunique() == len(series.dropna()) and pd.api.types.is_integer_dtype(series):
+            return True
+    return False
+
+
 def load_data_file(uploaded_file, encoding_choice="自動判定 (Auto)", sheet_name=0):
     """CSVまたはExcelファイル (.xlsx, .xls) の読み込み"""
     file_name = uploaded_file.name.lower()
@@ -213,20 +227,54 @@ def main():
     # データ前処理・リコード・フィルタリング セクション
     # ------------------------------------------------------------------
     with st.expander("🛠️ データの加工・Recode（再符号化）・特定値の除外・欠損値処理", expanded=False):
-        t_proc1, t_proc2, t_proc3, t_proc4, t_proc5, t_proc6, t_proc7, t_proc8, t_proc9 = st.tabs([
-            "① 特定値の除外",
-            "② 値のリコード (置換)",
-            "③ 数値変数のカテゴリ化 (ビン分割)",
-            "④ 合成スコア (合計・平均)",
-            "⑤ 逆転項目の反転",
-            "⑥ 標準化 / 正規化",
-            "⑦ 欠損値処理",
-            "⑧ 複数条件フィルタ",
-            "⑨ ダミー変数化"
-        ])
-        
+        c_p_cat, c_p_tool = st.columns([1.2, 2.8])
+        with c_p_cat:
+            proc_category = st.radio(
+                "前処理カテゴリー:",
+                [
+                    "🧼 クリーニング・除外",
+                    "🔄 変数の変換・符号化",
+                    "📐 尺度・スコア作成"
+                ],
+                key="proc_cat_radio"
+            )
+            
+        with c_p_tool:
+            if "クリーニング" in proc_category:
+                proc_tool = st.selectbox(
+                    "実行するツールを選択:",
+                    [
+                        "① 特定値の除外 (無効値 -99等の行を削除)",
+                        "⑦ 欠損値の処理 (リストワイズ削除 / 平均・中央値補完)",
+                        "⑧ 複数条件データ抽出 (AND / OR フィルタ)"
+                    ],
+                    key="proc_tool_clean"
+                )
+            elif "変換・符号化" in proc_category:
+                proc_tool = st.selectbox(
+                    "実行するツールを選択:",
+                    [
+                        "② 値のリコード (値の置き換え・再符号化)",
+                        "⑤ 逆転項目の反転 (アンケート尺度反転)",
+                        "⑨ ダミー変数化 (One-Hot Encoding)"
+                    ],
+                    key="proc_tool_trans"
+                )
+            else:  # 尺度・スコア作成
+                proc_tool = st.selectbox(
+                    "実行するツールを選択:",
+                    [
+                        "③ 数値変数のカテゴリ化 (ビン分割)",
+                        "④ 合成スコア作成 (複数変数の合計・平均)",
+                        "⑥ 標準化 / 正規化 (Zスコア / 0-1 スケーリング)"
+                    ],
+                    key="proc_tool_scale"
+                )
+
+        st.divider()
+
         # --- ① 特定値の除外 ---
-        with t_proc1:
+        if "① 特定値の除外" in proc_tool:
             st.markdown("**指定した変数から特定の無効値（例: -99, 99, '無回答' など）を除外します。**")
             col_ex1, col_ex2 = st.columns(2)
             with col_ex1:
@@ -243,7 +291,7 @@ def main():
                     st.rerun()
 
         # --- ② 値のリコード ---
-        with t_proc2:
+        elif "② 値のリコード" in proc_tool:
             st.markdown("**変数の特定の値を別の値（文字列・数値）に置き換えて新しい変数を作成します。**")
             rec_var = st.selectbox("リコード元の変数:", df.columns, key="rec_var")
             new_var_name = st.text_input("作成する新変数名:", value=f"{rec_var}_recoded", key="rec_new_name")
@@ -274,7 +322,7 @@ def main():
                 st.rerun()
 
         # --- ③ 数値変数のカテゴリ化 (ビン分割) ---
-        with t_proc3:
+        elif "③ 数値変数のカテゴリ化" in proc_tool:
             st.markdown("**連続数値変数（例: 年齢）を区切り値でカテゴリ変数（例: 年齢層）に変換します。**")
             num_cols_only = df.select_dtypes(include=[np.number]).columns.tolist()
             if num_cols_only:
@@ -296,10 +344,15 @@ def main():
                         st.error(f"エラー: {e}")
 
         # --- ④ 合成スコア ---
-        with t_proc4:
+        elif "④ 合成スコア作成" in proc_tool:
             st.markdown("**複数の数値変数から「平均値」または「合計値」の新変数（尺度得点など）を作成します。**")
+            num_cols_only = df.select_dtypes(include=[np.number]).columns.tolist()
+            valid_nums_for_comp = [c for c in num_cols_only if not is_id_like_column(c, df[c])]
+            if not valid_nums_for_comp:
+                valid_nums_for_comp = num_cols_only
+                
             if num_cols_only:
-                source_vars = st.multiselect("合成する変数を選択 (複数):", num_cols_only, key="comp_vars")
+                source_vars = st.multiselect("合成する変数を選択 (複数):", num_cols_only, default=valid_nums_for_comp[:min(3, len(valid_nums_for_comp))], key="comp_vars")
                 comp_method = st.radio("計算方法:", ["平均値 (Mean)", "合計値 (Sum)"], horizontal=True, key="comp_method")
                 comp_new_name = st.text_input("作成する新変数名:", value="合成スコア", key="comp_new_name")
                 
@@ -314,8 +367,9 @@ def main():
                         st.warning("合成には2つ以上の変数を選択してください。")
 
         # --- ⑤ 逆転項目の反転 ---
-        with t_proc5:
+        elif "⑤ 逆転項目の反転" in proc_tool:
             st.markdown("**アンケートの逆転項目（例: 1~5件法で 1↔5, 2↔4 に反転）を一括処理します。**")
+            num_cols_only = df.select_dtypes(include=[np.number]).columns.tolist()
             if num_cols_only:
                 c_r1, c_r2, c_r3 = st.columns(3)
                 with c_r1:
@@ -338,8 +392,9 @@ def main():
                         st.warning("1つ以上の変数を選択してください。")
 
         # --- ⑥ 標準化 / 正規化 ---
-        with t_proc6:
+        elif "⑥ 標準化 / 正規化" in proc_tool:
             st.markdown("**数値変数を「標準化（Zスコア: 平均0, 分散1）」または「正規化（0〜1スケーリング）」します。**")
+            num_cols_only = df.select_dtypes(include=[np.number]).columns.tolist()
             if num_cols_only:
                 c_s1, c_s2 = st.columns(2)
                 with c_s1:
@@ -361,7 +416,7 @@ def main():
                         st.warning("1つ以上の変数を選択してください。")
 
         # --- ⑦ 欠損値処理 ---
-        with t_proc7:
+        elif "⑦ 欠損値の処理" in proc_tool:
             st.markdown("**データ内の欠損値（NaN/空白）を削除または補完します。**")
             c_m1, c_m2 = st.columns(2)
             with c_m1:
@@ -403,7 +458,7 @@ def main():
                 st.rerun()
 
         # --- ⑧ 複数条件フィルタ ---
-        with t_proc8:
+        elif "⑧ 複数条件データ抽出" in proc_tool:
             st.markdown("**複数条件（AND / OR）を組み合わせて分析対象データを抽出します。**")
             filt_logic = st.radio("条件の結合方法:", ["すべての条件を満たす (AND)", "いずれかの条件を満たす (OR)"], horizontal=True, key="filt_logic")
             logic_code = "AND" if "AND" in filt_logic else "OR"
@@ -443,8 +498,9 @@ def main():
                     st.warning("比較値を入力してください。")
 
         # --- ⑨ ダミー変数化 ---
-        with t_proc9:
+        elif "⑨ ダミー変数化" in proc_tool:
             st.markdown("**カテゴリ変数（名義尺度）を 0 と 1 のダミー変数（One-Hot Encoding）に変換します。**")
+            num_cols_only = df.select_dtypes(include=[np.number]).columns.tolist()
             cat_vars = [c for c in df.columns if c not in num_cols_only or df[c].nunique() <= 10]
             if cat_vars:
                 c_d1, c_d2 = st.columns(2)
@@ -477,709 +533,739 @@ def main():
             st.write("**データ型一覧:**")
             st.dataframe(pd.DataFrame(df.dtypes, columns=["データ型"]), use_container_width=True)
 
-    # 変数列の分類
+    # 変数列の分類 & ID様変数の自動判定・除外
     all_columns = df.columns.tolist()
     numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
 
+    # 分析デフォルト選択用の「ID様変数を除外した変数リスト」
+    valid_all_cols = [c for c in all_columns if not is_id_like_column(c, df[c])]
+    valid_num_cols = [c for c in numeric_columns if not is_id_like_column(c, df[c])]
+    if not valid_all_cols:
+        valid_all_cols = all_columns
+    if not valid_num_cols:
+        valid_num_cols = numeric_columns
+
     # ------------------------------------------------------------------
-    # メイン分析タブ
+    # メイン分析セクション (4大カテゴリー階層ナビゲーション)
     # ------------------------------------------------------------------
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
-        "1. 単純集計",
-        "2. 基本統計量",
-        "3. クロス集計",
-        "4. 独立t検定",
-        "5. 対応ありt検定",
-        "6. 一元配置ANOVA",
-        "7. 二元配置ANOVA",
-        "8. 相関分析",
-        "9. 重回帰分析",
-        "10. ロジスティック回帰",
-        "11. 因子分析",
-        "12. 信頼性分析 (α)"
+    st.markdown("### 📊 統計分析メニュー")
+    cat_tab1, cat_tab2, cat_tab3, cat_tab4 = st.tabs([
+        "1. 📊 基本・記述統計",
+        "2. ⚖️ 平均値の差の検定",
+        "3. 📈 関連・回帰モデル",
+        "4. 🧩 尺度・多変量解析"
     ])
 
-    # ------------------------------------------------------------------
-    # TAB 1: 単純集計
-    # ------------------------------------------------------------------
-    with tab1:
-        st.subheader("1. 単純集計 (Frequency Analysis)")
-        target_vars = st.multiselect("集計したいカテゴリ変数を選択 (複数選択可):", all_columns, default=[all_columns[0]] if all_columns else [], key="freq_vars")
-        
-        if st.button("🚀 単純集計を実行", key="run_freq", type="primary"):
-            if target_vars:
-                results_dict = {}
-                with st.spinner(f"{len(target_vars)} 個の変数の単純集計を計算中..."):
-                    for var in target_vars:
-                        res_df, note, fig_bytes = stats_engine.analyze_frequency(df, var)
-                        results_dict[var] = {
-                            "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "target_var": var
-                        }
-                st.session_state["results"]["freq"] = {
-                    "results_dict": results_dict
-                }
-                st.toast(f"{len(results_dict)} 個の変数の単純集計が完了しました！", icon="✅")
-            else:
-                st.warning("1つ以上の変数を選択してください。")
+    # ==================================================================
+    # カテゴリー 1: 基本・記述統計
+    # ==================================================================
+    with cat_tab1:
+        stat_method_1 = st.radio(
+            "分析手法を選択:",
+            ["1. 単純集計 (Frequency)", "2. 基本統計量 (Descriptive)", "3. クロス集計 (Crosstab & Chi-Square)"],
+            horizontal=True,
+            key="method_cat1"
+        )
+        st.divider()
+
+        # 1. 単純集計
+        if "1. 単純集計" in stat_method_1:
+            st.subheader("1. 単純集計 (Frequency Analysis)")
+            target_vars = st.multiselect("集計したいカテゴリ変数を選択 (複数選択可):", all_columns, default=[valid_all_cols[0]] if valid_all_cols else [], key="freq_vars")
             
-        if "freq" in st.session_state["results"]:
-            res_data = st.session_state["results"]["freq"]
-            results_dict = res_data.get("results_dict", {})
-            if not results_dict and "res_df" in res_data:
-                results_dict = {res_data["target_var"]: res_data}
-                
-            if results_dict:
-                c_btn1, _ = st.columns([2, 1])
-                with c_btn1:
-                    if st.button(f"➕ 選択した全変数 ({len(results_dict)}件) をExcelレポートに追加", key="btn_add_freq"):
-                        for var, res in results_dict.items():
-                            st.session_state["analysis_queue"].append({
-                                "sheet_name": f"単純集計_{var}",
-                                "title": f"{var} の度数分布表",
-                                "df": res["res_df"],
-                                "note": res["note"],
-                                "fig_bytes": res["fig_bytes"]
-                            })
-                        st.toast(f"『単純集計 ({len(results_dict)}件)』をレポートリストに追加しました！", icon="📋")
-                        st.rerun()
-
-                active_var = st.selectbox("表示する変数の切替:", list(results_dict.keys()), key="select_freq_display")
-                if active_var in results_dict:
-                    res = results_dict[active_var]
-                    c1, c2 = st.columns([2.2, 2])
-                    with c1:
-                        st.write(f"**集計表: {res['target_var']}**")
-                        st.dataframe(res["res_df"], use_container_width=True)
-                        st.caption(res["note"])
-                    with c2:
-                        st.write("**度数分布グラフ (APA Style)**")
-                        with st.container(height=450):
-                            st.image(res["fig_bytes"], use_column_width=True)
-
-    # ------------------------------------------------------------------
-    # TAB 2: 基本統計量
-    # ------------------------------------------------------------------
-    with tab2:
-        st.subheader("2. 基本統計量 (Descriptive Statistics)")
-        selected_num_vars = st.multiselect("分析する数値変数を選択:", numeric_columns, default=numeric_columns[:min(4, len(numeric_columns))], key="desc_vars")
-        
-        if st.button("🚀 基本統計量を計算", key="run_desc", type="primary"):
-            if selected_num_vars:
-                with st.spinner("基本統計量と分布プロットを作成中..."):
-                    res_df, hist_dict, note, fig_bytes = stats_engine.analyze_descriptives(df, selected_num_vars)
-                    st.session_state["results"]["desc"] = {
-                        "res_df": res_df, "hist_dict": hist_dict, "note": note, "fig_bytes": fig_bytes
-                    }
-                st.toast("基本統計量の計算が完了しました！", icon="✅")
-            else:
-                st.warning("1つ以上の数値変数を選択してください。")
-                
-        if "desc" in st.session_state["results"]:
-            res = st.session_state["results"]["desc"]
-            
-            if st.button("➕ この結果をExcelレポートに追加", key="btn_add_desc"):
-                st.session_state["analysis_queue"].append({
-                    "sheet_name": "基本統計量",
-                    "title": "選択変数の基本統計量一覧表",
-                    "df": res["res_df"],
-                    "note": res["note"]
-                })
-                for var, hist_df in res.get("hist_dict", {}).items():
-                    st.session_state["analysis_queue"].append({
-                        "sheet_name": f"分布_{var}",
-                        "title": f"{var} の度数分布 (ヒストグラム)",
-                        "df": hist_df,
-                        "note": f"注. {var} の階級別度数分布。"
-                    })
-                st.toast("『基本統計量 & ヒストグラム分布』をレポートリストに追加しました！", icon="📋")
-                st.rerun()
-
-            c1, c2 = st.columns([2.5, 2])
-            with c1:
-                st.write("**基本統計量一覧**")
-                st.dataframe(res["res_df"], use_container_width=True)
-                st.caption(res["note"])
-            with c2:
-                st.write("**分布プロット (ヒストグラム & 確率密度)**")
-                with st.container(height=480):
-                    st.image(res["fig_bytes"], use_column_width=True)
-
-    # ------------------------------------------------------------------
-    # TAB 3: クロス集計
-    # ------------------------------------------------------------------
-    with tab3:
-        st.subheader("3. クロス集計 & カイ二乗検定 (Crosstab & Chi-Square)")
-        c1, c2 = st.columns(2)
-        with c1:
-            row_var = st.selectbox("行変数 (Row):", all_columns, key="ct_row")
-        with c2:
-            col_var = st.selectbox("列変数 (Column):", [c for c in all_columns if c != row_var], key="ct_col")
-            
-        if st.button("🚀 クロス集計を実行", key="run_ct", type="primary"):
-            if row_var and col_var:
-                with st.spinner("クロス集計とカイ二乗検定を計算中..."):
-                    ct_formatted_df, pct_df, note, fig_bytes = stats_engine.analyze_crosstab(df, row_var, col_var)
-                    st.session_state["results"]["ct"] = {
-                        "ct_formatted_df": ct_formatted_df, "pct_df": pct_df, "note": note, "fig_bytes": fig_bytes,
-                        "row_var": row_var, "col_var": col_var
-                    }
-                st.toast("クロス集計が完了しました！", icon="✅")
-                
-        if "ct" in st.session_state["results"]:
-            res = st.session_state["results"]["ct"]
-            
-            if st.button("➕ この結果をExcelレポートに追加", key="btn_add_ct"):
-                st.session_state["analysis_queue"].append({
-                    "sheet_name": f"クロス_{res['row_var']}_vs_{res['col_var']}",
-                    "title": f"クロス集計表 ({res['row_var']} × {res['col_var']})",
-                    "df": res["ct_formatted_df"],
-                    "note": res["note"]
-                })
-                st.session_state["analysis_queue"].append({
-                    "sheet_name": f"構成比_{res['row_var']}_vs_{res['col_var']}",
-                    "title": f"構成比 (%) 表 ({res['row_var']} × {res['col_var']})",
-                    "df": res["pct_df"],
-                    "note": "注. 数値は列方向の構成比 (%) を表します。"
-                })
-                st.toast("『クロス集計表 & 構成比グラフ』をレポートリストに追加しました！", icon="📋")
-                st.rerun()
-
-            col_left, col_right = st.columns([2.5, 2])
-            with col_left:
-                st.write(f"**クロス度数表 [度数 (列%)] ({res['row_var']} × {res['col_var']})**")
-                st.dataframe(res["ct_formatted_df"], use_container_width=True)
-                st.caption(res["note"])
-            with col_right:
-                st.write("**構成比グラフ (100% 積み上げ)**")
-                with st.container(height=450):
-                    st.image(res["fig_bytes"], use_column_width=True)
-
-    # ------------------------------------------------------------------
-    # TAB 4: 独立2群のt検定
-    # ------------------------------------------------------------------
-    with tab4:
-        st.subheader("4. 独立2群の平均値の差の検定 (Independent Samples t-Test / Welch)")
-        c1, c2, c3 = st.columns([1.5, 2, 1.5])
-        with c1:
-            group_var = st.selectbox("グループ変数 (2カテゴリ):", all_columns, key="tt_group")
-        with c2:
-            num_vars = st.multiselect("比較する従属変数 (複数選択可):", numeric_columns, default=numeric_columns[:min(3, len(numeric_columns))], key="tt_nums")
-        with c3:
-            equal_var_opt = st.selectbox("等分散性の仮定:", ["Welchのt検定 (推奨: 等分散非仮定)", "Studentのt検定 (等分散仮定)"], key="tt_eq_opt")
-            equal_var = True if "Student" in equal_var_opt else False
-            
-        if st.button("🚀 独立t検定を実行", key="run_tt", type="primary"):
-            if group_var and num_vars:
-                results_dict = {}
-                errors = []
-                with st.spinner(f"{len(num_vars)} 個の従属変数のt検定を計算中..."):
-                    for nv in num_vars:
-                        try:
-                            res_df, note, fig_bytes = stats_engine.analyze_ttest(df, group_var, nv, equal_var=equal_var)
-                            results_dict[nv] = {
-                                "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "num_var": nv, "group_var": group_var
+            if st.button("🚀 単純集計を実行", key="run_freq", type="primary"):
+                if target_vars:
+                    results_dict = {}
+                    with st.spinner(f"{len(target_vars)} 個の変数の単純集計を計算中..."):
+                        for var in target_vars:
+                            res_df, note, fig_bytes = stats_engine.analyze_frequency(df, var)
+                            results_dict[var] = {
+                                "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "target_var": var
                             }
-                        except Exception as e:
-                            errors.append(f"{nv}: {e}")
-                
-                if results_dict:
-                    st.session_state["results"]["tt"] = {
-                        "results_dict": results_dict, "group_var": group_var
+                    st.session_state["results"]["freq"] = {
+                        "results_dict": results_dict
                     }
-                    st.toast(f"{len(results_dict)} 個の従属変数のt検定が完了しました！", icon="✅")
-                if errors:
-                    for err in errors:
-                        st.error(f"分析エラー ({err})")
-            else:
-                st.warning("グループ変数と1つ以上の従属変数を選択してください。")
+                    st.toast(f"{len(results_dict)} 個の変数の単純集計が完了しました！", icon="✅")
+                else:
+                    st.warning("1つ以上の変数を選択してください。")
+                
+            if "freq" in st.session_state["results"]:
+                res_data = st.session_state["results"]["freq"]
+                results_dict = res_data.get("results_dict", {})
+                if not results_dict and "res_df" in res_data:
+                    results_dict = {res_data["target_var"]: res_data}
                     
-        if "tt" in st.session_state["results"]:
-            res_data = st.session_state["results"]["tt"]
-            results_dict = res_data.get("results_dict", {})
-            if not results_dict and "res_df" in res_data:
-                results_dict = {res_data["num_var"]: res_data}
-                
-            if results_dict:
-                grp_v = res_data.get("group_var", "")
-                combined_df = pd.concat([res["res_df"] for res in results_dict.values()])
-                combined_notes = " | ".join([f"{nv}: {res['note']}" for nv, res in results_dict.items()]) if len(results_dict) > 1 else list(results_dict.values())[0]["note"]
-                
-                c_btn1, _ = st.columns([2, 1])
-                with c_btn1:
-                    if st.button(f"➕ 選択した全従属変数 ({len(results_dict)}件) の結果をExcelレポートに追加", key="btn_add_tt"):
-                        st.session_state["analysis_queue"].append({
-                            "sheet_name": f"t検定_{grp_v}",
-                            "title": f"2群の平均値の比較 (t検定: {grp_v})",
-                            "df": combined_df,
-                            "note": combined_notes,
-                            "fig_bytes": list(results_dict.values())[0]["fig_bytes"]
-                        })
-                        st.toast(f"『t検定一括結果 ({len(results_dict)}件)』をレポートリストに追加しました！", icon="📋")
-                        st.rerun()
-
-                st.markdown(f"**📊 t検定 要約一覧表 (グループ変数: {grp_v})**")
-                st.dataframe(combined_df, use_container_width=True)
-
-                st.divider()
-                active_nv = st.selectbox("個別グラフ表示の従属変数を選択:", list(results_dict.keys()), key="select_tt_display")
-                if active_nv in results_dict:
-                    res = results_dict[active_nv]
-                    col_left, col_right = st.columns([2.5, 2])
-                    with col_left:
-                        st.write(f"**t検定詳細 ({res['num_var']} × {res['group_var']})**")
-                        st.dataframe(res["res_df"], use_container_width=True)
-                        st.caption(res["note"])
-                    with col_right:
-                        st.write("**平均値比較グラフ (95%信頼区間)**")
-                        with st.container(height=450):
-                            st.image(res["fig_bytes"], use_column_width=True)
-
-    # ------------------------------------------------------------------
-    # TAB 5: 対応のあるt検定 (Paired t-test)
-    # ------------------------------------------------------------------
-    with tab5:
-        st.subheader("5. 対応のある2群の平均値の差の検定 (Paired Samples t-Test)")
-        st.caption("同一の被験者における前後比較（例: 事前テスト vs 事後テスト）や対応する2条件間の平均値の差を検定します。")
-        c1, c2 = st.columns(2)
-        with c1:
-            pair_var1 = st.selectbox("条件1 (例: 事前):", numeric_columns, key="pt_v1")
-        with c2:
-            pair_var2 = st.selectbox("条件2 (例: 事後):", [c for c in numeric_columns if c != pair_var1], key="pt_v2")
-            
-        if st.button("🚀 対応のあるt検定を実行", key="run_pt", type="primary"):
-            if pair_var1 and pair_var2:
-                try:
-                    with st.spinner("対応のあるt検定を計算中..."):
-                        pt_df, note, fig_bytes = stats_engine.analyze_paired_ttest(df, pair_var1, pair_var2)
-                        st.session_state["results"]["pt"] = {
-                            "pt_df": pt_df, "note": note, "fig_bytes": fig_bytes,
-                            "pair_var1": pair_var1, "pair_var2": pair_var2
-                        }
-                    st.toast("対応のあるt検定が完了しました！", icon="✅")
-                except Exception as e:
-                    st.error(f"分析エラー: {e}")
-            else:
-                st.warning("2つの数値変数を選択してください。")
-                
-        if "pt" in st.session_state["results"]:
-            res = st.session_state["results"]["pt"]
-            
-            if st.button("➕ この結果をExcelレポートに追加", key="btn_add_pt"):
-                st.session_state["analysis_queue"].append({
-                    "sheet_name": f"対応ありt_{res['pair_var1']}_vs_{res['pair_var2']}",
-                    "title": f"対応のあるt検定結果表 ({res['pair_var1']} vs. {res['pair_var2']})",
-                    "df": res["pt_df"],
-                    "note": res["note"],
-                    "fig_bytes": res["fig_bytes"]
-                })
-                st.toast("『対応のあるt検定結果』をレポートリストに追加しました！", icon="📋")
-                st.rerun()
-
-            c_l, c_r = st.columns([2.5, 2])
-            with c_l:
-                st.write(f"**対応のあるt検定 結果表 ({res['pair_var1']} vs. {res['pair_var2']})**")
-                st.dataframe(res["pt_df"], use_container_width=True)
-                st.caption(res["note"])
-            with c_r:
-                st.write("**平均値の変化プロット (95%信頼区間)**")
-                with st.container(height=450):
-                    st.image(res["fig_bytes"], use_column_width=True)
-
-    # ------------------------------------------------------------------
-    # TAB 6: 一元配置分散分析 (ANOVA)
-    # ------------------------------------------------------------------
-    with tab6:
-        st.subheader("6. 一元配置分散分析 & 多重比較 (One-Way ANOVA)")
-        c1, c2 = st.columns([1.5, 2])
-        with c1:
-            anova_group = st.selectbox("要因 (グループ変数):", all_columns, key="anova_grp")
-        with c2:
-            anova_nums = st.multiselect("従属変数 (複数選択可):", numeric_columns, default=numeric_columns[:min(3, len(numeric_columns))], key="anova_nums")
-            
-        if st.button("🚀 分散分析(ANOVA)を実行", key="run_anova", type="primary"):
-            if anova_group and anova_nums:
-                results_dict = {}
-                errors = []
-                with st.spinner(f"{len(anova_nums)} 個の従属変数の分散分析を実行中..."):
-                    for nv in anova_nums:
-                        try:
-                            anova_df, tukey_df, note, fig_bytes = stats_engine.analyze_anova(df, anova_group, nv)
-                            results_dict[nv] = {
-                                "anova_df": anova_df, "tukey_df": tukey_df, "note": note, "fig_bytes": fig_bytes,
-                                "anova_num": nv, "anova_group": anova_group
-                            }
-                        except Exception as e:
-                            errors.append(f"{nv}: {e}")
-                
                 if results_dict:
-                    st.session_state["results"]["anova"] = {
-                        "results_dict": results_dict, "anova_group": anova_group
-                    }
-                    st.toast(f"{len(results_dict)} 個の従属変数の分散分析が完了しました！", icon="✅")
-                if errors:
-                    for err in errors:
-                        st.error(f"分析エラー ({err})")
-            else:
-                st.warning("要因変数と1つ以上の従属変数を選択してください。")
+                    c_btn1, _ = st.columns([2, 1])
+                    with c_btn1:
+                        if st.button(f"➕ 選択した全変数 ({len(results_dict)}件) をExcelレポートに追加", key="btn_add_freq"):
+                            for var, res in results_dict.items():
+                                st.session_state["analysis_queue"].append({
+                                    "sheet_name": f"単純集計_{var}",
+                                    "title": f"{var} の度数分布表",
+                                    "df": res["res_df"],
+                                    "note": res["note"],
+                                    "fig_bytes": res["fig_bytes"]
+                                })
+                            st.toast(f"『単純集計 ({len(results_dict)}件)』をレポートリストに追加しました！", icon="📋")
+                            st.rerun()
+
+                    active_var = st.selectbox("表示する変数の切替:", list(results_dict.keys()), key="select_freq_display")
+                    if active_var in results_dict:
+                        res = results_dict[active_var]
+                        c1, c2 = st.columns([2.2, 2])
+                        with c1:
+                            st.write(f"**集計表: {res['target_var']}**")
+                            st.dataframe(res["res_df"], use_container_width=True)
+                            st.caption(res["note"])
+                        with c2:
+                            st.write("**度数分布グラフ (APA Style)**")
+                            with st.container(height=450):
+                                st.image(res["fig_bytes"], use_column_width=True)
+
+        # 2. 基本統計量
+        elif "2. 基本統計量" in stat_method_1:
+            st.subheader("2. 基本統計量 (Descriptive Statistics)")
+            selected_num_vars = st.multiselect("分析する数値変数を選択:", numeric_columns, default=valid_num_cols[:min(4, len(valid_num_cols))], key="desc_vars")
+            
+            if st.button("🚀 基本統計量を計算", key="run_desc", type="primary"):
+                if selected_num_vars:
+                    with st.spinner("基本統計量と分布プロットを作成中..."):
+                        res_df, hist_dict, note, fig_bytes = stats_engine.analyze_descriptives(df, selected_num_vars)
+                        st.session_state["results"]["desc"] = {
+                            "res_df": res_df, "hist_dict": hist_dict, "note": note, "fig_bytes": fig_bytes
+                        }
+                    st.toast("基本統計量の計算が完了しました！", icon="✅")
+                else:
+                    st.warning("1つ以上の数値変数を選択してください。")
+                    
+            if "desc" in st.session_state["results"]:
+                res = st.session_state["results"]["desc"]
                 
-        if "anova" in st.session_state["results"]:
-            res_data = st.session_state["results"]["anova"]
-            results_dict = res_data.get("results_dict", {})
-            if not results_dict and "anova_df" in res_data:
-                results_dict = {res_data["anova_num"]: res_data}
-                
-            if results_dict:
-                grp_v = res_data.get("anova_group", "")
-                combined_anova_df = pd.concat([res["anova_df"] for res in results_dict.values()])
-                combined_notes = " | ".join([f"{nv}: {res['note']}" for nv, res in results_dict.items()]) if len(results_dict) > 1 else list(results_dict.values())[0]["note"]
-                
-                tukey_list = []
-                for nv, res in results_dict.items():
-                    tdf = res["tukey_df"].reset_index()
-                    tdf.insert(0, "従属変数", nv)
-                    tukey_list.append(tdf)
-                combined_tukey_df = pd.concat(tukey_list).set_index(["従属変数", "グループ1", "グループ2"]) if tukey_list else None
-                
-                c_btn1, _ = st.columns([2, 1])
-                with c_btn1:
-                    if st.button(f"➕ 選択した全従属変数 ({len(results_dict)}件) の結果をExcelレポートに追加", key="btn_add_anova"):
+                if st.button("➕ この結果をExcelレポートに追加", key="btn_add_desc"):
+                    st.session_state["analysis_queue"].append({
+                        "sheet_name": "基本統計量",
+                        "title": "選択変数の基本統計量一覧表",
+                        "df": res["res_df"],
+                        "note": res["note"]
+                    })
+                    for var, hist_df in res.get("hist_dict", {}).items():
                         st.session_state["analysis_queue"].append({
-                            "sheet_name": f"分散分析_{grp_v}",
-                            "title": f"一元配置分散分析表 ({grp_v})",
-                            "df": combined_anova_df,
-                            "note": combined_notes,
-                            "fig_bytes": list(results_dict.values())[0]["fig_bytes"]
+                            "sheet_name": f"分布_{var}",
+                            "title": f"{var} の度数分布 (ヒストグラム)",
+                            "df": hist_df,
+                            "note": f"注. {var} の階級別度数分布。"
                         })
-                        if combined_tukey_df is not None:
-                            st.session_state["analysis_queue"].append({
-                                "sheet_name": f"多重比較_{grp_v}",
-                                "title": f"Tukey HSD 多重比較結果 ({grp_v})",
-                                "df": combined_tukey_df,
-                                "note": "注. 有意水準 alpha = .05 におけるTukeyのHSD検定結果。"
-                            })
-                        st.toast(f"『分散分析 & 多重比較一括結果 ({len(results_dict)}件)』をレポートリストに追加しました！", icon="📋")
-                        st.rerun()
+                    st.toast("『基本統計量 & ヒストグラム分布』をレポートリストに追加しました！", icon="📋")
+                    st.rerun()
 
-                st.markdown(f"**📊 分散分析 要約一覧表 (要因: {grp_v})**")
-                st.dataframe(combined_anova_df, use_container_width=True)
+                c1, c2 = st.columns([2.5, 2])
+                with c1:
+                    st.write("**基本統計量一覧**")
+                    st.dataframe(res["res_df"], use_container_width=True)
+                    st.caption(res["note"])
+                with c2:
+                    st.write("**分布プロット (ヒストグラム & 確率密度)**")
+                    with st.container(height=480):
+                        st.image(res["fig_bytes"], use_column_width=True)
 
-                st.divider()
-                active_nv = st.selectbox("個別結果表示の従属変数を選択:", list(results_dict.keys()), key="select_anova_display")
-                if active_nv in results_dict:
-                    res = results_dict[active_nv]
-                    c_l, c_r = st.columns([2.5, 2])
-                    with c_l:
-                        st.write(f"**分散分析詳細 ({res['anova_num']} × {res['anova_group']})**")
-                        st.dataframe(res["anova_df"], use_container_width=True)
-                        st.caption(res["note"])
+        # 3. クロス集計
+        elif "3. クロス集計" in stat_method_1:
+            st.subheader("3. クロス集計 & カイ二乗検定 (Crosstab & Chi-Square)")
+            c1, c2 = st.columns(2)
+            with c1:
+                row_var = st.selectbox("行変数 (Row):", valid_all_cols if valid_all_cols else all_columns, key="ct_row")
+            with c2:
+                col_options = [c for c in all_columns if c != row_var]
+                col_var = st.selectbox("列変数 (Column):", col_options, key="ct_col")
+                
+            if st.button("🚀 クロス集計を実行", key="run_ct", type="primary"):
+                if row_var and col_var:
+                    with st.spinner("クロス集計とカイ二乗検定を計算中..."):
+                        ct_formatted_df, pct_df, note, fig_bytes = stats_engine.analyze_crosstab(df, row_var, col_var)
+                        st.session_state["results"]["ct"] = {
+                            "ct_formatted_df": ct_formatted_df, "pct_df": pct_df, "note": note, "fig_bytes": fig_bytes,
+                            "row_var": row_var, "col_var": col_var
+                        }
+                    st.toast("クロス集計が完了しました！", icon="✅")
+                    
+            if "ct" in st.session_state["results"]:
+                res = st.session_state["results"]["ct"]
+                
+                if st.button("➕ この結果をExcelレポートに追加", key="btn_add_ct"):
+                    st.session_state["analysis_queue"].append({
+                        "sheet_name": f"クロス_{res['row_var']}_vs_{res['col_var']}",
+                        "title": f"クロス集計表 ({res['row_var']} × {res['col_var']})",
+                        "df": res["ct_formatted_df"],
+                        "note": res["note"]
+                    })
+                    st.session_state["analysis_queue"].append({
+                        "sheet_name": f"構成比_{res['row_var']}_vs_{res['col_var']}",
+                        "title": f"構成比 (%) 表 ({res['row_var']} × {res['col_var']})",
+                        "df": res["pct_df"],
+                        "note": "注. 数値は列方向の構成比 (%) を表します。"
+                    })
+                    st.toast("『クロス集計表 & 構成比グラフ』をレポートリストに追加しました！", icon="📋")
+                    st.rerun()
+
+                col_left, col_right = st.columns([2.5, 2])
+                with col_left:
+                    st.write(f"**クロス度数表 [度数 (列%)] ({res['row_var']} × {res['col_var']})**")
+                    st.dataframe(res["ct_formatted_df"], use_container_width=True)
+                    st.caption(res["note"])
+                with col_right:
+                    st.write("**構成比グラフ (100% 積み上げ)**")
+                    with st.container(height=450):
+                        st.image(res["fig_bytes"], use_column_width=True)
+
+    # ==================================================================
+    # カテゴリー 2: 平均値の差の検定
+    # ==================================================================
+    with cat_tab2:
+        stat_method_2 = st.radio(
+            "分析手法を選択:",
+            ["4. 独立2群t検定", "5. 対応のあるt検定", "6. 一元配置ANOVA", "7. 二元配置ANOVA"],
+            horizontal=True,
+            key="method_cat2"
+        )
+        st.divider()
+
+        # 4. 独立2群のt検定
+        if "4. 独立2群t検定" in stat_method_2:
+            st.subheader("4. 独立2群の平均値の差の検定 (Independent Samples t-Test / Welch)")
+            c1, c2, c3 = st.columns([1.5, 2, 1.5])
+            with c1:
+                group_var = st.selectbox("グループ変数 (2カテゴリ):", valid_all_cols if valid_all_cols else all_columns, key="tt_group")
+            with c2:
+                num_vars = st.multiselect("比較する従属変数 (複数選択可):", numeric_columns, default=valid_num_cols[:min(3, len(valid_num_cols))], key="tt_nums")
+            with c3:
+                equal_var_opt = st.selectbox("等分散性の仮定:", ["Welchのt検定 (推奨: 等分散非仮定)", "Studentのt検定 (等分散仮定)"], key="tt_eq_opt")
+                equal_var = True if "Student" in equal_var_opt else False
+                
+            if st.button("🚀 独立t検定を実行", key="run_tt", type="primary"):
+                if group_var and num_vars:
+                    results_dict = {}
+                    errors = []
+                    with st.spinner(f"{len(num_vars)} 個の従属変数のt検定を計算中..."):
+                        for nv in num_vars:
+                            try:
+                                res_df, note, fig_bytes = stats_engine.analyze_ttest(df, group_var, nv, equal_var=equal_var)
+                                results_dict[nv] = {
+                                    "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "num_var": nv, "group_var": group_var
+                                }
+                            except Exception as e:
+                                errors.append(f"{nv}: {e}")
+                    
+                    if results_dict:
+                        st.session_state["results"]["tt"] = {
+                            "results_dict": results_dict, "group_var": group_var
+                        }
+                        st.toast(f"{len(results_dict)} 個の従属変数のt検定が完了しました！", icon="✅")
+                    if errors:
+                        for err in errors:
+                            st.error(f"分析エラー ({err})")
+                else:
+                    st.warning("グループ変数と1つ以上の従属変数を選択してください。")
                         
-                        st.write("**Tukey HSD 多重比較結果**")
-                        st.dataframe(res["tukey_df"], use_container_width=True)
-                    with c_r:
-                        st.write("**平均値比較プロット**")
-                        with st.container(height=450):
-                            st.image(res["fig_bytes"], use_column_width=True)
+            if "tt" in st.session_state["results"]:
+                res_data = st.session_state["results"]["tt"]
+                results_dict = res_data.get("results_dict", {})
+                if not results_dict and "res_df" in res_data:
+                    results_dict = {res_data["num_var"]: res_data}
+                    
+                if results_dict:
+                    grp_v = res_data.get("group_var", "")
+                    combined_df = pd.concat([res["res_df"] for res in results_dict.values()])
+                    combined_notes = " | ".join([f"{nv}: {res['note']}" for nv, res in results_dict.items()]) if len(results_dict) > 1 else list(results_dict.values())[0]["note"]
+                    
+                    c_btn1, _ = st.columns([2, 1])
+                    with c_btn1:
+                        if st.button(f"➕ 選択した全従属変数 ({len(results_dict)}件) の結果をExcelレポートに追加", key="btn_add_tt"):
+                            st.session_state["analysis_queue"].append({
+                                "sheet_name": f"t検定_{grp_v}",
+                                "title": f"2群の平均値の比較 (t検定: {grp_v})",
+                                "df": combined_df,
+                                "note": combined_notes,
+                                "fig_bytes": list(results_dict.values())[0]["fig_bytes"]
+                            })
+                            st.toast(f"『t検定一括結果 ({len(results_dict)}件)』をレポートリストに追加しました！", icon="📋")
+                            st.rerun()
 
-    # ------------------------------------------------------------------
-    # TAB 7: 二元配置分散分析 (Two-way ANOVA)
-    # ------------------------------------------------------------------
-    with tab7:
-        st.subheader("7. 二元配置分散分析 (Two-Way ANOVA)")
-        st.caption("2つの要因（独立変数）による主効果および交互作用効果を検定します。")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            two_f1 = st.selectbox("要因1 (因子A):", all_columns, key="two_f1")
-        with c2:
-            two_f2 = st.selectbox("要因2 (因子B):", [c for c in all_columns if c != two_f1], key="two_f2")
-        with c3:
-            two_dep = st.selectbox("従属変数 (目的変数):", numeric_columns, key="two_dep")
-            
-        if st.button("🚀 二元配置分散分析を実行", key="run_two_anova", type="primary"):
-            if two_f1 and two_f2 and two_dep:
-                try:
-                    with st.spinner("二元配置分散分析と交互作用プロットを生成中..."):
-                        anova_df, cell_desc, note, fig_bytes = stats_engine.analyze_two_way_anova(df, two_f1, two_f2, two_dep)
-                        st.session_state["results"]["two_anova"] = {
-                            "anova_df": anova_df, "cell_desc": cell_desc, "note": note, "fig_bytes": fig_bytes,
-                            "two_f1": two_f1, "two_f2": two_f2, "two_dep": two_dep
+                    st.markdown(f"**📊 t検定 要約一覧表 (グループ変数: {grp_v})**")
+                    st.dataframe(combined_df, use_container_width=True)
+
+                    st.divider()
+                    active_nv = st.selectbox("個別グラフ表示の従属変数を選択:", list(results_dict.keys()), key="select_tt_display")
+                    if active_nv in results_dict:
+                        res = results_dict[active_nv]
+                        col_left, col_right = st.columns([2.5, 2])
+                        with col_left:
+                            st.write(f"**t検定詳細 ({res['num_var']} × {res['group_var']})**")
+                            st.dataframe(res["res_df"], use_container_width=True)
+                            st.caption(res["note"])
+                        with col_right:
+                            st.write("**平均値比較グラフ (95%信頼区間)**")
+                            with st.container(height=450):
+                                st.image(res["fig_bytes"], use_column_width=True)
+
+        # 5. 対応のあるt検定
+        elif "5. 対応のあるt検定" in stat_method_2:
+            st.subheader("5. 対応のある2群の平均値の差の検定 (Paired Samples t-Test)")
+            st.caption("同一の被験者における前後比較（例: 事前テスト vs 事後テスト）や対応する2条件間の平均値の差を検定します。")
+            c1, c2 = st.columns(2)
+            with c1:
+                pair_var1 = st.selectbox("条件1 (例: 事前):", valid_num_cols if valid_num_cols else numeric_columns, key="pt_v1")
+            with c2:
+                pair_options = [c for c in numeric_columns if c != pair_var1]
+                pair_var2 = st.selectbox("条件2 (例: 事後):", pair_options, key="pt_v2")
+                
+            if st.button("🚀 対応のあるt検定を実行", key="run_pt", type="primary"):
+                if pair_var1 and pair_var2:
+                    try:
+                        with st.spinner("対応のあるt検定を計算中..."):
+                            pt_df, note, fig_bytes = stats_engine.analyze_paired_ttest(df, pair_var1, pair_var2)
+                            st.session_state["results"]["pt"] = {
+                                "pt_df": pt_df, "note": note, "fig_bytes": fig_bytes,
+                                "pair_var1": pair_var1, "pair_var2": pair_var2
+                            }
+                        st.toast("対応のあるt検定が完了しました！", icon="✅")
+                    except Exception as e:
+                        st.error(f"分析エラー: {e}")
+                else:
+                    st.warning("2つの数値変数を選択してください。")
+                    
+            if "pt" in st.session_state["results"]:
+                res = st.session_state["results"]["pt"]
+                
+                if st.button("➕ この結果をExcelレポートに追加", key="btn_add_pt"):
+                    st.session_state["analysis_queue"].append({
+                        "sheet_name": f"対応ありt_{res['pair_var1']}_vs_{res['pair_var2']}",
+                        "title": f"対応のあるt検定結果表 ({res['pair_var1']} vs. {res['pair_var2']})",
+                        "df": res["pt_df"],
+                        "note": res["note"],
+                        "fig_bytes": res["fig_bytes"]
+                    })
+                    st.toast("『対応のあるt検定結果』をレポートリストに追加しました！", icon="📋")
+                    st.rerun()
+
+                c_l, c_r = st.columns([2.5, 2])
+                with c_l:
+                    st.write(f"**対応のあるt検定 結果表 ({res['pair_var1']} vs. {res['pair_var2']})**")
+                    st.dataframe(res["pt_df"], use_container_width=True)
+                    st.caption(res["note"])
+                with c_r:
+                    st.write("**平均値の変化プロット (95%信頼区間)**")
+                    with st.container(height=450):
+                        st.image(res["fig_bytes"], use_column_width=True)
+
+        # 6. 一元配置ANOVA
+        elif "6. 一元配置ANOVA" in stat_method_2:
+            st.subheader("6. 一元配置分散分析 & 多重比較 (One-Way ANOVA)")
+            c1, c2 = st.columns([1.5, 2])
+            with c1:
+                anova_group = st.selectbox("要因 (グループ変数):", valid_all_cols if valid_all_cols else all_columns, key="anova_grp")
+            with c2:
+                anova_nums = st.multiselect("従属変数 (複数選択可):", numeric_columns, default=valid_num_cols[:min(3, len(valid_num_cols))], key="anova_nums")
+                
+            if st.button("🚀 分散分析(ANOVA)を実行", key="run_anova", type="primary"):
+                if anova_group and anova_nums:
+                    results_dict = {}
+                    errors = []
+                    with st.spinner(f"{len(anova_nums)} 個の従属変数の分散分析を実行中..."):
+                        for nv in anova_nums:
+                            try:
+                                anova_df, tukey_df, note, fig_bytes = stats_engine.analyze_anova(df, anova_group, nv)
+                                results_dict[nv] = {
+                                    "anova_df": anova_df, "tukey_df": tukey_df, "note": note, "fig_bytes": fig_bytes,
+                                    "anova_num": nv, "anova_group": anova_group
+                                }
+                            except Exception as e:
+                                errors.append(f"{nv}: {e}")
+                    
+                    if results_dict:
+                        st.session_state["results"]["anova"] = {
+                            "results_dict": results_dict, "anova_group": anova_group
                         }
-                    st.toast("二元配置分散分析が完了しました！", icon="✅")
-                except Exception as e:
-                    st.error(f"分析エラー: {e}")
-            else:
-                st.warning("要因1、要因2、および従属変数を選択してください。")
-                
-        if "two_anova" in st.session_state["results"]:
-            res = st.session_state["results"]["two_anova"]
-            
-            if st.button("➕ この結果をExcelレポートに追加", key="btn_add_two_anova"):
-                st.session_state["analysis_queue"].append({
-                    "sheet_name": f"二元配置ANOVA_{res['two_dep']}",
-                    "title": f"二元配置分散分析表 (従属変数: {res['two_dep']})",
-                    "df": res["anova_df"],
-                    "note": res["note"],
-                    "fig_bytes": res["fig_bytes"],
-                    "extra_df": res["cell_desc"],
-                    "extra_title": f"セル別平均値 (M (SD): {res['two_f1']} × {res['two_f2']})"
-                })
-                st.toast("『二元配置分散分析結果』をレポートリストに追加しました！", icon="📋")
-                st.rerun()
+                        st.toast(f"{len(results_dict)} 個の従属変数の分散分析が完了しました！", icon="✅")
+                    if errors:
+                        for err in errors:
+                            st.error(f"分析エラー ({err})")
+                else:
+                    st.warning("要因変数と1つ以上の従属変数を選択してください。")
+                    
+            if "anova" in st.session_state["results"]:
+                res_data = st.session_state["results"]["anova"]
+                results_dict = res_data.get("results_dict", {})
+                if not results_dict and "anova_df" in res_data:
+                    results_dict = {res_data["anova_num"]: res_data}
+                    
+                if results_dict:
+                    grp_v = res_data.get("anova_group", "")
+                    combined_anova_df = pd.concat([res["anova_df"] for res in results_dict.values()])
+                    combined_notes = " | ".join([f"{nv}: {res['note']}" for nv, res in results_dict.items()]) if len(results_dict) > 1 else list(results_dict.values())[0]["note"]
+                    
+                    tukey_list = []
+                    for nv, res in results_dict.items():
+                        tdf = res["tukey_df"].reset_index()
+                        tdf.insert(0, "従属変数", nv)
+                        tukey_list.append(tdf)
+                    combined_tukey_df = pd.concat(tukey_list).set_index(["従属変数", "グループ1", "グループ2"]) if tukey_list else None
+                    
+                    c_btn1, _ = st.columns([2, 1])
+                    with c_btn1:
+                        if st.button(f"➕ 選択した全従属変数 ({len(results_dict)}件) の結果をExcelレポートに追加", key="btn_add_anova"):
+                            st.session_state["analysis_queue"].append({
+                                "sheet_name": f"分散分析_{grp_v}",
+                                "title": f"一元配置分散分析表 ({grp_v})",
+                                "df": combined_anova_df,
+                                "note": combined_notes,
+                                "fig_bytes": list(results_dict.values())[0]["fig_bytes"]
+                            })
+                            if combined_tukey_df is not None:
+                                st.session_state["analysis_queue"].append({
+                                    "sheet_name": f"多重比較_{grp_v}",
+                                    "title": f"Tukey HSD 多重比較結果 ({grp_v})",
+                                    "df": combined_tukey_df,
+                                    "note": "注. 有意水準 alpha = .05 におけるTukeyのHSD検定結果。"
+                                })
+                            st.toast(f"『分散分析 & 多重比較一括結果 ({len(results_dict)}件)』をレポートリストに追加しました！", icon="📋")
+                            st.rerun()
 
-            c_l, c_r = st.columns([2.5, 2])
-            with c_l:
-                st.write(f"**二元配置分散分析表 (従属変数: {res['two_dep']})**")
-                st.dataframe(res["anova_df"], use_container_width=True)
-                st.caption(res["note"])
-                
-                st.write(f"**セル別記述統計量 [M (SD)] ({res['two_f1']} × {res['two_f2']})**")
-                st.dataframe(res["cell_desc"], use_container_width=True)
-            with c_r:
-                st.write("**交互作用プロット (Interaction Plot)**")
-                with st.container(height=450):
-                    st.image(res["fig_bytes"], use_column_width=True)
+                    st.markdown(f"**📊 分散分析 要約一覧表 (要因: {grp_v})**")
+                    st.dataframe(combined_anova_df, use_container_width=True)
 
-    # ------------------------------------------------------------------
-    # TAB 8: 相関分析
-    # ------------------------------------------------------------------
-    with tab8:
-        st.subheader("8. 相関分析 (Correlation Analysis)")
-        c1, c2 = st.columns([2.5, 1])
-        with c1:
-            corr_vars = st.multiselect("相関を計算する数値変数 (複数選択):", numeric_columns, default=numeric_columns[:min(4, len(numeric_columns))], key="corr_vars")
-        with c2:
-            corr_method = st.radio("相関係数の種類:", ["pearson", "spearman"], key="corr_method_opt")
-            
-        if st.button("🚀 相関分析を実行", key="run_corr", type="primary"):
-            if len(corr_vars) >= 2:
-                with st.spinner("相関係数行列とヒートマップを生成中..."):
-                    res_df, note, fig_bytes = stats_engine.analyze_correlation(df, corr_vars, method=corr_method)
-                    st.session_state["results"]["corr"] = {
-                        "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "corr_method": corr_method
-                    }
-                st.toast("相関分析が完了しました！", icon="✅")
-            else:
-                st.warning("相関分析には2つ以上の変数を選択してください。")
+                    st.divider()
+                    active_nv = st.selectbox("個別結果表示の従属変数を選択:", list(results_dict.keys()), key="select_anova_display")
+                    if active_nv in results_dict:
+                        res = results_dict[active_nv]
+                        c_l, c_r = st.columns([2.5, 2])
+                        with c_l:
+                            st.write(f"**分散分析詳細 ({res['anova_num']} × {res['anova_group']})**")
+                            st.dataframe(res["anova_df"], use_container_width=True)
+                            st.caption(res["note"])
+                            
+                            st.write("**Tukey HSD 多重比較結果**")
+                            st.dataframe(res["tukey_df"], use_container_width=True)
+                        with c_r:
+                            st.write("**平均値比較プロット**")
+                            with st.container(height=450):
+                                st.image(res["fig_bytes"], use_column_width=True)
+
+        # 7. 二元配置ANOVA
+        elif "7. 二元配置ANOVA" in stat_method_2:
+            st.subheader("7. 二元配置分散分析 (Two-Way ANOVA)")
+            st.caption("2つの要因（独立変数）による主効果および交互作用効果を検定します。")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                two_f1 = st.selectbox("要因1 (因子A):", valid_all_cols if valid_all_cols else all_columns, key="two_f1")
+            with c2:
+                two_f2_options = [c for c in all_columns if c != two_f1]
+                two_f2 = st.selectbox("要因2 (因子B):", two_f2_options, key="two_f2")
+            with c3:
+                two_dep = st.selectbox("従属変数 (目的変数):", valid_num_cols if valid_num_cols else numeric_columns, key="two_dep")
                 
-        if "corr" in st.session_state["results"]:
-            res = st.session_state["results"]["corr"]
-            
-            if st.button("➕ この結果をExcelレポートに追加", key="btn_add_corr"):
+            if st.button("🚀 二元配置分散分析を実行", key="run_two_anova", type="primary"):
+                if two_f1 and two_f2 and two_dep:
+                    try:
+                        with st.spinner("二元配置分散分析と交互作用プロットを生成中..."):
+                            anova_df, cell_desc, note, fig_bytes = stats_engine.analyze_two_way_anova(df, two_f1, two_f2, two_dep)
+                            st.session_state["results"]["two_anova"] = {
+                                "anova_df": anova_df, "cell_desc": cell_desc, "note": note, "fig_bytes": fig_bytes,
+                                "two_f1": two_f1, "two_f2": two_f2, "two_dep": two_dep
+                            }
+                        st.toast("二元配置分散分析が完了しました！", icon="✅")
+                    except Exception as e:
+                        st.error(f"分析エラー: {e}")
+                else:
+                    st.warning("要因1、要因2、および従属変数を選択してください。")
+                    
+            if "two_anova" in st.session_state["results"]:
+                res = st.session_state["results"]["two_anova"]
+                
+                if st.button("➕ この結果をExcelレポートに追加", key="btn_add_two_anova"):
+                    st.session_state["analysis_queue"].append({
+                        "sheet_name": f"二元配置ANOVA_{res['two_dep']}",
+                        "title": f"二元配置分散分析表 (従属変数: {res['two_dep']})",
+                        "df": res["anova_df"],
+                        "note": res["note"],
+                        "fig_bytes": res["fig_bytes"],
+                        "extra_df": res["cell_desc"],
+                        "extra_title": f"セル別平均値 (M (SD): {res['two_f1']} × {res['two_f2']})"
+                    })
+                    st.toast("『二元配置分散分析結果』をレポートリストに追加しました！", icon="📋")
+                    st.rerun()
+
+                c_l, c_r = st.columns([2.5, 2])
+                with c_l:
+                    st.write(f"**二元配置分散分析表 (従属変数: {res['two_dep']})**")
+                    st.dataframe(res["anova_df"], use_container_width=True)
+                    st.caption(res["note"])
+                    
+                    st.write(f"**セル別記述統計量 [M (SD)] ({res['two_f1']} × {res['two_f2']})**")
+                    st.dataframe(res["cell_desc"], use_container_width=True)
+                with c_r:
+                    st.write("**交互作用プロット (Interaction Plot)**")
+                    with st.container(height=450):
+                        st.image(res["fig_bytes"], use_column_width=True)
+
+    # ==================================================================
+    # カテゴリー 3: 関連・回帰モデル
+    # ==================================================================
+    with cat_tab3:
+        stat_method_3 = st.radio(
+            "分析手法を選択:",
+            ["8. 相関分析", "9. 重回帰分析", "10. ロジスティック回帰"],
+            horizontal=True,
+            key="method_cat3"
+        )
+        st.divider()
+
+        # 8. 相関分析
+        if "8. 相関分析" in stat_method_3:
+            st.subheader("8. 相関分析 (Correlation Analysis)")
+            c1, c2 = st.columns([2.5, 1])
+            with c1:
+                corr_vars = st.multiselect("相関を計算する数値変数 (複数選択):", numeric_columns, default=valid_num_cols[:min(4, len(valid_num_cols))], key="corr_vars")
+            with c2:
+                corr_method = st.radio("相関係数の種類:", ["pearson", "spearman"], key="corr_method_opt")
+                
+            if st.button("🚀 相関分析を実行", key="run_corr", type="primary"):
+                if len(corr_vars) >= 2:
+                    with st.spinner("相関係数行列とヒートマップを生成中..."):
+                        res_df, note, fig_bytes = stats_engine.analyze_correlation(df, corr_vars, method=corr_method)
+                        st.session_state["results"]["corr"] = {
+                            "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "corr_method": corr_method
+                        }
+                    st.toast("相関分析が完了しました！", icon="✅")
+                else:
+                    st.warning("相関分析には2つ以上の変数を選択してください。")
+                    
+            if "corr" in st.session_state["results"]:
+                res = st.session_state["results"]["corr"]
+                
+                if st.button("➕ この結果をExcelレポートに追加", key="btn_add_corr"):
+                    method_jp = "ピアソン" if res["corr_method"] == "pearson" else "スピアマン"
+                    st.session_state["analysis_queue"].append({
+                        "sheet_name": f"相関分析_{res['corr_method']}",
+                        "title": f"{method_jp} 相関係数行列",
+                        "df": res["res_df"],
+                        "note": res["note"],
+                        "fig_bytes": res["fig_bytes"]
+                    })
+                    st.toast("『相関係数行列』をレポートリストに追加しました！", icon="📋")
+                    st.rerun()
+
+                c_l, c_r = st.columns([2.5, 2])
                 method_jp = "ピアソン" if res["corr_method"] == "pearson" else "スピアマン"
-                st.session_state["analysis_queue"].append({
-                    "sheet_name": f"相関分析_{res['corr_method']}",
-                    "title": f"{method_jp} 相関係数行列",
-                    "df": res["res_df"],
-                    "note": res["note"],
-                    "fig_bytes": res["fig_bytes"]
-                })
-                st.toast("『相関係数行列』をレポートリストに追加しました！", icon="📋")
-                st.rerun()
+                with c_l:
+                    st.write(f"**{method_jp} 相関係数行列**")
+                    st.dataframe(res["res_df"], use_container_width=True)
+                    st.caption(res["note"])
+                with c_r:
+                    st.write("**相関ヒートマップ**")
+                    with st.container(height=450):
+                        st.image(res["fig_bytes"], use_column_width=True)
 
-            c_l, c_r = st.columns([2.5, 2])
-            method_jp = "ピアソン" if res["corr_method"] == "pearson" else "スピアマン"
-            with c_l:
-                st.write(f"**{method_jp} 相関係数行列**")
-                st.dataframe(res["res_df"], use_container_width=True)
-                st.caption(res["note"])
-            with c_r:
-                st.write("**相関ヒートマップ**")
-                with st.container(height=450):
-                    st.image(res["fig_bytes"], use_column_width=True)
-
-    # ------------------------------------------------------------------
-    # TAB 9: 重回帰分析
-    # ------------------------------------------------------------------
-    with tab9:
-        st.subheader("9. 重回帰分析 (Multiple Linear Regression)")
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            target_var = st.selectbox("目的変数 (Y):", numeric_columns, key="reg_target")
-        with c2:
-            avail_features = [c for c in numeric_columns if c != target_var]
-            feature_vars = st.multiselect("説明変数 (X):", avail_features, default=avail_features[:min(3, len(avail_features))], key="reg_features")
-            
-        if st.button("🚀 回帰分析を実行", key="run_reg", type="primary"):
-            if target_var and feature_vars:
-                with st.spinner("重回帰モデルを推定中..."):
-                    res_df, note, fig_bytes = stats_engine.analyze_regression(df, target_var, feature_vars)
-                    st.session_state["results"]["reg"] = {
-                        "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "target_var": target_var
-                    }
-                st.toast("重回帰分析が完了しました！", icon="✅")
-            else:
-                st.warning("目的変数と1つ以上の説明変数を選択してください。")
+        # 9. 重回帰分析
+        elif "9. 重回帰分析" in stat_method_3:
+            st.subheader("9. 重回帰分析 (Multiple Linear Regression)")
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                target_var = st.selectbox("目的変数 (Y):", valid_num_cols if valid_num_cols else numeric_columns, key="reg_target")
+            with c2:
+                avail_features = [c for c in numeric_columns if c != target_var]
+                default_features = [c for c in valid_num_cols if c != target_var][:min(3, len(avail_features))]
+                feature_vars = st.multiselect("説明変数 (X):", avail_features, default=default_features, key="reg_features")
                 
-        if "reg" in st.session_state["results"]:
-            res = st.session_state["results"]["reg"]
-            
-            if st.button("➕ この結果をExcelレポートに追加", key="btn_add_reg"):
-                st.session_state["analysis_queue"].append({
-                    "sheet_name": f"回帰分析_{res['target_var']}",
-                    "title": f"{res['target_var']} を目的変数とする重回帰分析表",
-                    "df": res["res_df"],
-                    "note": res["note"],
-                    "fig_bytes": res["fig_bytes"]
-                })
-                st.toast("『重回帰分析結果』をレポートリストに追加しました！", icon="📋")
-                st.rerun()
-
-            c_l, c_r = st.columns([2.5, 2])
-            with c_l:
-                st.write(f"**重回帰モデル分析結果表 (目的変数: {res['target_var']})**")
-                st.dataframe(res["res_df"], use_container_width=True)
-                st.caption(res["note"])
-            with c_r:
-                st.write("**実測値 vs. 予測値プロット**")
-                with st.container(height=450):
-                    st.image(res["fig_bytes"], use_column_width=True)
-
-    # ------------------------------------------------------------------
-    # TAB 10: ロジスティック回帰分析
-    # ------------------------------------------------------------------
-    with tab10:
-        st.subheader("10. 二項ロジスティック回帰分析 (Binary Logistic Regression)")
-        st.caption("二値カテゴリ変数（例: 購買あり/なし、合格/不合格、0/1）の生起確率を予測し、オッズ比を算出します。")
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            logit_target = st.selectbox("目的変数 (二値カテゴリ):", all_columns, key="logit_target")
-        with c2:
-            logit_avail_features = [c for c in numeric_columns if c != logit_target]
-            logit_features = st.multiselect("説明変数 (連続またはダミー変数):", logit_avail_features, default=logit_avail_features[:min(3, len(logit_avail_features))], key="logit_features")
-            
-        if st.button("🚀 ロジスティック回帰を実行", key="run_logit", type="primary"):
-            if logit_target and logit_features:
-                try:
-                    with st.spinner("ロジスティック回帰モデルを推定中..."):
-                        logit_df, note, fig_bytes = stats_engine.analyze_logistic_regression(df, logit_target, logit_features)
-                        st.session_state["results"]["logit"] = {
-                            "logit_df": logit_df, "note": note, "fig_bytes": fig_bytes,
-                            "logit_target": logit_target
+            if st.button("🚀 回帰分析を実行", key="run_reg", type="primary"):
+                if target_var and feature_vars:
+                    with st.spinner("重回帰モデルを推定中..."):
+                        res_df, note, fig_bytes = stats_engine.analyze_regression(df, target_var, feature_vars)
+                        st.session_state["results"]["reg"] = {
+                            "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "target_var": target_var
                         }
-                    st.toast("ロジスティック回帰分析が完了しました！", icon="✅")
-                except Exception as e:
-                    st.error(f"分析エラー: {e}")
-            else:
-                st.warning("目的変数と1つ以上の説明変数を選択してください。")
+                    st.toast("重回帰分析が完了しました！", icon="✅")
+                else:
+                    st.warning("目的変数と1つ以上の説明変数を選択してください。")
+                    
+            if "reg" in st.session_state["results"]:
+                res = st.session_state["results"]["reg"]
                 
-        if "logit" in st.session_state["results"]:
-            res = st.session_state["results"]["logit"]
-            
-            if st.button("➕ この結果をExcelレポートに追加", key="btn_add_logit"):
-                st.session_state["analysis_queue"].append({
-                    "sheet_name": f"ロジスティック_{res['logit_target']}",
-                    "title": f"ロジスティック回帰分析結果表 (目的変数: {res['logit_target']})",
-                    "df": res["logit_df"],
-                    "note": res["note"],
-                    "fig_bytes": res["fig_bytes"]
-                })
-                st.toast("『ロジスティック回帰結果』をレポートリストに追加しました！", icon="📋")
-                st.rerun()
+                if st.button("➕ この結果をExcelレポートに追加", key="btn_add_reg"):
+                    st.session_state["analysis_queue"].append({
+                        "sheet_name": f"回帰分析_{res['target_var']}",
+                        "title": f"{res['target_var']} を目的変数とする重回帰分析表",
+                        "df": res["res_df"],
+                        "note": res["note"],
+                        "fig_bytes": res["fig_bytes"]
+                    })
+                    st.toast("『重回帰分析結果』をレポートリストに追加しました！", icon="📋")
+                    st.rerun()
 
-            c_l, c_r = st.columns([2.5, 2])
-            with c_l:
-                st.write(f"**ロジスティック回帰パラメータ表 (オッズ比・95%CI)**")
-                st.dataframe(res["logit_df"], use_container_width=True)
-                st.caption(res["note"])
-            with c_r:
-                st.write("**オッズ比 フォレストプロット (95%信頼区間)**")
-                with st.container(height=450):
-                    st.image(res["fig_bytes"], use_column_width=True)
+                c_l, c_r = st.columns([2.5, 2])
+                with c_l:
+                    st.write(f"**重回帰モデル分析結果表 (目的変数: {res['target_var']})**")
+                    st.dataframe(res["res_df"], use_container_width=True)
+                    st.caption(res["note"])
+                with c_r:
+                    st.write("**実測値 vs. 予測値プロット**")
+                    with st.container(height=450):
+                        st.image(res["fig_bytes"], use_column_width=True)
 
-    # ------------------------------------------------------------------
-    # TAB 11: 因子分析
-    # ------------------------------------------------------------------
-    with tab11:
-        st.subheader("11. 探索的因子分析 (Exploratory Factor Analysis)")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            fa_vars = st.multiselect("因子分析に投入する観測変数:", numeric_columns, default=numeric_columns[:min(6, len(numeric_columns))], key="fa_vars")
-        with c2:
-            n_factors = st.number_input("抽出する因子数:", min_value=1, max_value=max(1, len(fa_vars)-1), value=min(2, max(1, len(fa_vars)-1)))
-        with c3:
-            rotation = st.selectbox("因子回転法:", ["promax", "varimax"], key="fa_rot")
-            
-        if st.button("🚀 因子分析を実行", key="run_fa", type="primary"):
-            if len(fa_vars) >= 3:
-                with st.spinner("因子分析とスクリープロットを実行中..."):
-                    res_df, note, fig_bytes = stats_engine.analyze_factor_analysis(df, fa_vars, n_factors=int(n_factors), rotation=rotation)
-                    st.session_state["results"]["fa"] = {
-                        "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "rotation": rotation
-                    }
-                st.toast("因子分析が完了しました！", icon="✅")
-            else:
-                st.warning("因子分析には3つ以上の観測変数を選択してください。")
+        # 10. ロジスティック回帰
+        elif "10. ロジスティック回帰" in stat_method_3:
+            st.subheader("10. 二項ロジスティック回帰分析 (Binary Logistic Regression)")
+            st.caption("二値カテゴリ変数（例: 購買あり/なし、合格/不合格、0/1）の生起確率を予測し、オッズ比を算出します。")
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                logit_target = st.selectbox("目的変数 (二値カテゴリ):", valid_all_cols if valid_all_cols else all_columns, key="logit_target")
+            with c2:
+                logit_avail_features = [c for c in numeric_columns if c != logit_target]
+                logit_default_features = [c for c in valid_num_cols if c != logit_target][:min(3, len(logit_avail_features))]
+                logit_features = st.multiselect("説明変数 (連続またはダミー変数):", logit_avail_features, default=logit_default_features, key="logit_features")
                 
-        if "fa" in st.session_state["results"]:
-            res = st.session_state["results"]["fa"]
-            
-            if st.button("➕ この結果をExcelレポートに追加", key="btn_add_fa"):
-                rot_jp = "プロマックス回転" if res["rotation"] == "promax" else "バリマックス回転"
-                st.session_state["analysis_queue"].append({
-                    "sheet_name": "因子分析",
-                    "title": f"探索的因子分析結果 ({rot_jp})",
-                    "df": res["res_df"],
-                    "note": res["note"],
-                    "fig_bytes": res["fig_bytes"]
-                })
-                st.toast("『因子分析結果』をレポートリストに追加しました！", icon="📋")
-                st.rerun()
+            if st.button("🚀 ロジスティック回帰を実行", key="run_logit", type="primary"):
+                if logit_target and logit_features:
+                    try:
+                        with st.spinner("ロジスティック回帰モデルを推定中..."):
+                            logit_df, note, fig_bytes = stats_engine.analyze_logistic_regression(df, logit_target, logit_features)
+                            st.session_state["results"]["logit"] = {
+                                "logit_df": logit_df, "note": note, "fig_bytes": fig_bytes,
+                                "logit_target": logit_target
+                            }
+                        st.toast("ロジスティック回帰分析が完了しました！", icon="✅")
+                    except Exception as e:
+                        st.error(f"分析エラー: {e}")
+                else:
+                    st.warning("目的変数と1つ以上の説明変数を選択してください。")
+                    
+            if "logit" in st.session_state["results"]:
+                res = st.session_state["results"]["logit"]
+                
+                if st.button("➕ この結果をExcelレポートに追加", key="btn_add_logit"):
+                    st.session_state["analysis_queue"].append({
+                        "sheet_name": f"ロジスティック_{res['logit_target']}",
+                        "title": f"ロジスティック回帰分析結果表 (目的変数: {res['logit_target']})",
+                        "df": res["logit_df"],
+                        "note": res["note"],
+                        "fig_bytes": res["fig_bytes"]
+                    })
+                    st.toast("『ロジスティック回帰結果』をレポートリストに追加しました！", icon="📋")
+                    st.rerun()
 
-            c_l, c_r = st.columns([2.5, 2])
-            with c_l:
-                rot_jp = "プロマックス回転" if res["rotation"] == "promax" else "バリマックス回転"
-                st.write(f"**因子負荷量行列 & 寄与率 ({rot_jp})**")
-                st.dataframe(res["res_df"], use_container_width=True)
-                st.caption(res["note"])
-            with c_r:
-                st.write("**スクリープロット**")
-                with st.container(height=450):
-                    st.image(res["fig_bytes"], use_column_width=True)
+                c_l, c_r = st.columns([2.5, 2])
+                with c_l:
+                    st.write(f"**ロジスティック回帰パラメータ表 (オッズ比・95%CI)**")
+                    st.dataframe(res["logit_df"], use_container_width=True)
+                    st.caption(res["note"])
+                with c_r:
+                    st.write("**オッズ比 フォレストプロット (95%信頼区間)**")
+                    with st.container(height=450):
+                        st.image(res["fig_bytes"], use_column_width=True)
 
-    # ------------------------------------------------------------------
-    # TAB 12: 尺度信頼性分析
-    # ------------------------------------------------------------------
-    with tab12:
-        st.subheader("12. 尺度信頼性分析 (Scale Reliability / Cronbach's Alpha)")
-        st.caption("アンケート尺度などの内的一貫性をクロンバックのα係数、項目-全体相関、項目削除時αで評価します。")
-        rel_vars = st.multiselect("信頼性を分析する尺度項目 (数値変数):", numeric_columns, default=numeric_columns[:min(5, len(numeric_columns))], key="rel_vars")
-        
-        if st.button("🚀 信頼性分析を実行", key="run_rel", type="primary"):
-            if len(rel_vars) >= 2:
-                try:
-                    with st.spinner("クロンバックのα係数と項目統計量を計算中..."):
-                        rel_df, note, fig_bytes, alpha_val = stats_engine.analyze_reliability(df, rel_vars)
-                        st.session_state["results"]["rel"] = {
-                            "rel_df": rel_df, "note": note, "fig_bytes": fig_bytes, "alpha_val": alpha_val, "rel_vars": rel_vars
+    # ==================================================================
+    # カテゴリー 4: 尺度・多変量解析
+    # ==================================================================
+    with cat_tab4:
+        stat_method_4 = st.radio(
+            "分析手法を選択:",
+            ["11. 因子分析", "12. 信頼性分析 (α)"],
+            horizontal=True,
+            key="method_cat4"
+        )
+        st.divider()
+
+        # 11. 因子分析
+        if "11. 因子分析" in stat_method_4:
+            st.subheader("11. 探索的因子分析 (Exploratory Factor Analysis)")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                fa_vars = st.multiselect("因子分析に投入する観測変数:", numeric_columns, default=valid_num_cols[:min(6, len(valid_num_cols))], key="fa_vars")
+            with c2:
+                n_factors = st.number_input("抽出する因子数:", min_value=1, max_value=max(1, len(fa_vars)-1), value=min(2, max(1, len(fa_vars)-1)))
+            with c3:
+                rotation = st.selectbox("因子回転法:", ["promax", "varimax"], key="fa_rot")
+                
+            if st.button("🚀 因子分析を実行", key="run_fa", type="primary"):
+                if len(fa_vars) >= 3:
+                    with st.spinner("因子分析とスクリープロットを実行中..."):
+                        res_df, note, fig_bytes = stats_engine.analyze_factor_analysis(df, fa_vars, n_factors=int(n_factors), rotation=rotation)
+                        st.session_state["results"]["fa"] = {
+                            "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "rotation": rotation
                         }
-                    st.toast(f"信頼性分析が完了しました！ (全体 α = {alpha_val:.3f})", icon="✅")
-                except Exception as e:
-                    st.error(f"分析エラー: {e}")
-            else:
-                st.warning("信頼性分析には2つ以上の変数を選択してください。")
+                    st.toast("因子分析が完了しました！", icon="✅")
+                else:
+                    st.warning("因子分析には3つ以上の観測変数を選択してください。")
+                    
+            if "fa" in st.session_state["results"]:
+                res = st.session_state["results"]["fa"]
                 
-        if "rel" in st.session_state["results"]:
-            res = st.session_state["results"]["rel"]
-            
-            if st.button("➕ この結果をExcelレポートに追加", key="btn_add_rel"):
-                st.session_state["analysis_queue"].append({
-                    "sheet_name": "信頼性分析",
-                    "title": f"尺度項目の信頼性分析表 (全体 α = {res['alpha_val']:.3f})",
-                    "df": res["rel_df"],
-                    "note": res["note"],
-                    "fig_bytes": res["fig_bytes"]
-                })
-                st.toast("『尺度信頼性分析結果』をレポートリストに追加しました！", icon="📋")
-                st.rerun()
+                if st.button("➕ この結果をExcelレポートに追加", key="btn_add_fa"):
+                    rot_jp = "プロマックス回転" if res["rotation"] == "promax" else "バリマックス回転"
+                    st.session_state["analysis_queue"].append({
+                        "sheet_name": "因子分析",
+                        "title": f"探索的因子分析結果 ({rot_jp})",
+                        "df": res["res_df"],
+                        "note": res["note"],
+                        "fig_bytes": res["fig_bytes"]
+                    })
+                    st.toast("『因子分析結果』をレポートリストに追加しました！", icon="📋")
+                    st.rerun()
 
-            c_l, c_r = st.columns([2.5, 2])
-            with c_l:
-                st.write(f"**項目統計量および項目削除時クロンバックのα係数 (全体 α = {res['alpha_val']:.3f})**")
-                st.dataframe(res["rel_df"], use_container_width=True)
-                st.caption(res["note"])
-            with c_r:
-                st.write("**項目削除時αプロット**")
-                with st.container(height=450):
-                    st.image(res["fig_bytes"], use_column_width=True)
+                c_l, c_r = st.columns([2.5, 2])
+                with c_l:
+                    rot_jp = "プロマックス回転" if res["rotation"] == "promax" else "バリマックス回転"
+                    st.write(f"**因子負荷量行列 & 寄与率 ({rot_jp})**")
+                    st.dataframe(res["res_df"], use_container_width=True)
+                    st.caption(res["note"])
+                with c_r:
+                    st.write("**スクリープロット**")
+                    with st.container(height=450):
+                        st.image(res["fig_bytes"], use_column_width=True)
+
+        # 12. 尺度信頼性分析
+        elif "12. 信頼性分析" in stat_method_4:
+            st.subheader("12. 尺度信頼性分析 (Scale Reliability / Cronbach's Alpha)")
+            st.caption("アンケート尺度などの内的一貫性をクロンバックのα係数、項目-全体相関、項目削除時αで評価します。")
+            rel_vars = st.multiselect("信頼性を分析する尺度項目 (数値変数):", numeric_columns, default=valid_num_cols[:min(5, len(valid_num_cols))], key="rel_vars")
+            
+            if st.button("🚀 信頼性分析を実行", key="run_rel", type="primary"):
+                if len(rel_vars) >= 2:
+                    try:
+                        with st.spinner("クロンバックのα係数と項目統計量を計算中..."):
+                            rel_df, note, fig_bytes, alpha_val = stats_engine.analyze_reliability(df, rel_vars)
+                            st.session_state["results"]["rel"] = {
+                                "rel_df": rel_df, "note": note, "fig_bytes": fig_bytes, "alpha_val": alpha_val, "rel_vars": rel_vars
+                            }
+                        st.toast(f"信頼性分析が完了しました！ (全体 α = {alpha_val:.3f})", icon="✅")
+                    except Exception as e:
+                        st.error(f"分析エラー: {e}")
+                else:
+                    st.warning("信頼性分析には2つ以上の変数を選択してください。")
+                    
+            if "rel" in st.session_state["results"]:
+                res = st.session_state["results"]["rel"]
+                
+                if st.button("➕ この結果をExcelレポートに追加", key="btn_add_rel"):
+                    st.session_state["analysis_queue"].append({
+                        "sheet_name": "信頼性分析",
+                        "title": f"尺度項目の信頼性分析表 (全体 α = {res['alpha_val']:.3f})",
+                        "df": res["rel_df"],
+                        "note": res["note"],
+                        "fig_bytes": res["fig_bytes"]
+                    })
+                    st.toast("『尺度信頼性分析結果』をレポートリストに追加しました！", icon="📋")
+                    st.rerun()
+
+                c_l, c_r = st.columns([2.5, 2])
+                with c_l:
+                    st.write(f"**項目統計量および項目削除時クロンバックのα係数 (全体 α = {res['alpha_val']:.3f})**")
+                    st.dataframe(res["rel_df"], use_container_width=True)
+                    st.caption(res["note"])
+                with c_r:
+                    st.write("**項目削除時αプロット**")
+                    with st.container(height=450):
+                        st.image(res["fig_bytes"], use_column_width=True)
 
 
 if __name__ == "__main__":
