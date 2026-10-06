@@ -1,6 +1,6 @@
 """
 APA Style Statistical Analysis Web Application using Streamlit.
-(Features: Manual Run Button, Recode/Filter Data Processing, Japanese Interface)
+(Features: Scrollable Plot Containers, Action Buttons on Top, Japanese Interface)
 """
 
 import io
@@ -54,10 +54,6 @@ st.markdown("""
     .stTabs [aria-selected="true"] {
         background-color: #1e3a8a !important;
         color: white !important;
-    }
-    .run-btn {
-        margin-top: 10px;
-        margin-bottom: 15px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -208,7 +204,6 @@ def main():
                     st.write(f"旧値: `{val}`")
                 with col_b:
                     new_val_str = st.text_input(f"`{val}` の新値:", value=str(val), key=f"rec_val_{i}")
-                    # 数値に変換できる場合は数値化
                     try:
                         if "." in new_val_str:
                             val_conv = float(new_val_str)
@@ -314,15 +309,8 @@ def main():
             
         if "freq" in st.session_state["results"]:
             res = st.session_state["results"]["freq"]
-            c1, c2 = st.columns([2, 2])
-            with c1:
-                st.write(f"**集計表: {res['target_var']}**")
-                st.dataframe(res["res_df"], use_container_width=True)
-                st.caption(res["note"])
-            with c2:
-                st.write("**度数分布グラフ (APA Style)**")
-                st.image(res["fig_bytes"], use_container_width=True)
-                
+            
+            # 追加ボタンを上部に配置してスクロールなしで即追加可能に
             if st.button("➕ この結果をExcelレポートに追加", key="btn_add_freq"):
                 st.session_state["analysis_queue"].append({
                     "sheet_name": f"単純集計_{res['target_var']}",
@@ -332,6 +320,16 @@ def main():
                     "fig_bytes": res["fig_bytes"]
                 })
                 st.toast(f"『単純集計_{res['target_var']}』をレポートリストに追加しました！", icon="📋")
+
+            c1, c2 = st.columns([2.2, 2])
+            with c1:
+                st.write(f"**集計表: {res['target_var']}**")
+                st.dataframe(res["res_df"], use_container_width=True)
+                st.caption(res["note"])
+            with c2:
+                st.write("**度数分布グラフ (APA Style)**")
+                with st.container(height=450):
+                    st.image(res["fig_bytes"], use_container_width=True)
 
     # ------------------------------------------------------------------
     # TAB 2: 基本統計量
@@ -353,15 +351,8 @@ def main():
                 
         if "desc" in st.session_state["results"]:
             res = st.session_state["results"]["desc"]
-            c1, c2 = st.columns([2.5, 2])
-            with c1:
-                st.write("**基本統計量一覧**")
-                st.dataframe(res["res_df"], use_container_width=True)
-                st.caption(res["note"])
-            with c2:
-                st.write("**分布プロット**")
-                st.image(res["fig_bytes"], use_container_width=True)
-                
+            
+            # 【重要】追加ボタンを結果の上部に配置
             if st.button("➕ この結果をExcelレポートに追加", key="btn_add_desc"):
                 st.session_state["analysis_queue"].append({
                     "sheet_name": "基本統計量",
@@ -371,6 +362,17 @@ def main():
                     "fig_bytes": res["fig_bytes"]
                 })
                 st.toast("『基本統計量』をレポートリストに追加しました！", icon="📋")
+
+            c1, c2 = st.columns([2.5, 2])
+            with c1:
+                st.write("**基本統計量一覧**")
+                st.dataframe(res["res_df"], use_container_width=True)
+                st.caption(res["note"])
+            with c2:
+                st.write("**分布プロット (スクロール表示)**")
+                # スクロール可能コンテナで縦長プロットも画面外へはみ出さない
+                with st.container(height=480):
+                    st.image(res["fig_bytes"], use_container_width=True)
 
     # ------------------------------------------------------------------
     # TAB 3: クロス集計
@@ -394,15 +396,7 @@ def main():
                 
         if "ct" in st.session_state["results"]:
             res = st.session_state["results"]["ct"]
-            col_left, col_right = st.columns([2.5, 2])
-            with col_left:
-                st.write(f"**クロス度数表 ({res['row_var']} × {res['col_var']})**")
-                st.dataframe(res["ct_df"], use_container_width=True)
-                st.caption(res["note"])
-            with col_right:
-                st.write("**構成比グラフ**")
-                st.image(res["fig_bytes"], use_container_width=True)
-                
+            
             if st.button("➕ この結果をExcelレポートに追加", key="btn_add_ct"):
                 st.session_state["analysis_queue"].append({
                     "sheet_name": f"クロス_{res['row_var']}_vs_{res['col_var']}",
@@ -412,6 +406,16 @@ def main():
                     "fig_bytes": res["fig_bytes"]
                 })
                 st.toast("『クロス集計結果』をレポートリストに追加しました！", icon="📋")
+
+            col_left, col_right = st.columns([2.5, 2])
+            with col_left:
+                st.write(f"**クロス度数表 ({res['row_var']} × {res['col_var']})**")
+                st.dataframe(res["ct_df"], use_container_width=True)
+                st.caption(res["note"])
+            with col_right:
+                st.write("**構成比グラフ**")
+                with st.container(height=450):
+                    st.image(res["fig_bytes"], use_container_width=True)
 
     # ------------------------------------------------------------------
     # TAB 4: t検定 / Welch検定
@@ -441,15 +445,7 @@ def main():
                     
         if "tt" in st.session_state["results"]:
             res = st.session_state["results"]["tt"]
-            col_left, col_right = st.columns([2.5, 2])
-            with col_left:
-                st.write(f"**t検定結果 ({res['num_var']} × {res['group_var']})**")
-                st.dataframe(res["res_df"], use_container_width=True)
-                st.caption(res["note"])
-            with col_right:
-                st.write("**平均値と比較グラフ (95%信頼区間)**")
-                st.image(res["fig_bytes"], use_container_width=True)
-                
+            
             if st.button("➕ この結果をExcelレポートに追加", key="btn_add_tt"):
                 st.session_state["analysis_queue"].append({
                     "sheet_name": f"t検定_{res['num_var']}",
@@ -459,6 +455,16 @@ def main():
                     "fig_bytes": res["fig_bytes"]
                 })
                 st.toast("『t検定結果』をレポートリストに追加しました！", icon="📋")
+
+            col_left, col_right = st.columns([2.5, 2])
+            with col_left:
+                st.write(f"**t検定結果 ({res['num_var']} × {res['group_var']})**")
+                st.dataframe(res["res_df"], use_container_width=True)
+                st.caption(res["note"])
+            with col_right:
+                st.write("**平均値と比較グラフ (95%信頼区間)**")
+                with st.container(height=450):
+                    st.image(res["fig_bytes"], use_container_width=True)
 
     # ------------------------------------------------------------------
     # TAB 5: 分散分析 (ANOVA)
@@ -483,18 +489,7 @@ def main():
                 
         if "anova" in st.session_state["results"]:
             res = st.session_state["results"]["anova"]
-            c_l, c_r = st.columns([2.5, 2])
-            with c_l:
-                st.write("**記述統計量 (各群の平均値と標準偏差)**")
-                st.dataframe(res["desc_df"], use_container_width=True)
-                st.caption(res["note"])
-                
-                st.write("**Tukey HSD 多重比較結果**")
-                st.dataframe(res["tukey_df"], use_container_width=True)
-            with c_r:
-                st.write("**平均値比較プロット**")
-                st.image(res["fig_bytes"], use_container_width=True)
-                
+            
             if st.button("➕ この結果をExcelレポートに追加", key="btn_add_anova"):
                 st.session_state["analysis_queue"].append({
                     "sheet_name": f"分散分析_{res['anova_num']}",
@@ -510,6 +505,19 @@ def main():
                     "note": "注. 有意水準 alpha = .05 におけるTukeyのHSD検定結果。"
                 })
                 st.toast("『分散分析 & 多重比較結果』をレポートリストに追加しました！", icon="📋")
+
+            c_l, c_r = st.columns([2.5, 2])
+            with c_l:
+                st.write("**記述統計量 (各群の平均値と標準偏差)**")
+                st.dataframe(res["desc_df"], use_container_width=True)
+                st.caption(res["note"])
+                
+                st.write("**Tukey HSD 多重比較結果**")
+                st.dataframe(res["tukey_df"], use_container_width=True)
+            with c_r:
+                st.write("**平均値比較プロット**")
+                with st.container(height=450):
+                    st.image(res["fig_bytes"], use_container_width=True)
 
     # ------------------------------------------------------------------
     # TAB 6: 相関分析
@@ -535,17 +543,9 @@ def main():
                 
         if "corr" in st.session_state["results"]:
             res = st.session_state["results"]["corr"]
-            c_l, c_r = st.columns([2.5, 2])
-            method_jp = "ピアソン" if res["corr_method"] == "pearson" else "スピアマン"
-            with c_l:
-                st.write(f"**{method_jp} 相関係数行列**")
-                st.dataframe(res["res_df"], use_container_width=True)
-                st.caption(res["note"])
-            with c_r:
-                st.write("**相関ヒートマップ**")
-                st.image(res["fig_bytes"], use_container_width=True)
-                
+            
             if st.button("➕ この結果をExcelレポートに追加", key="btn_add_corr"):
+                method_jp = "ピアソン" if res["corr_method"] == "pearson" else "スピアマン"
                 st.session_state["analysis_queue"].append({
                     "sheet_name": f"相関分析_{res['corr_method']}",
                     "title": f"{method_jp} 相関係数行列",
@@ -554,6 +554,17 @@ def main():
                     "fig_bytes": res["fig_bytes"]
                 })
                 st.toast("『相関係数行列』をレポートリストに追加しました！", icon="📋")
+
+            c_l, c_r = st.columns([2.5, 2])
+            method_jp = "ピアソン" if res["corr_method"] == "pearson" else "スピアマン"
+            with c_l:
+                st.write(f"**{method_jp} 相関係数行列**")
+                st.dataframe(res["res_df"], use_container_width=True)
+                st.caption(res["note"])
+            with c_r:
+                st.write("**相関ヒートマップ**")
+                with st.container(height=450):
+                    st.image(res["fig_bytes"], use_container_width=True)
 
     # ------------------------------------------------------------------
     # TAB 7: 重回帰分析
@@ -580,15 +591,7 @@ def main():
                 
         if "reg" in st.session_state["results"]:
             res = st.session_state["results"]["reg"]
-            c_l, c_r = st.columns([2.5, 2])
-            with c_l:
-                st.write(f"**重回帰モデル分析結果表 (目的変数: {res['target_var']})**")
-                st.dataframe(res["res_df"], use_container_width=True)
-                st.caption(res["note"])
-            with c_r:
-                st.write("**実測値 vs. 予測値プロット**")
-                st.image(res["fig_bytes"], use_container_width=True)
-                
+            
             if st.button("➕ この結果をExcelレポートに追加", key="btn_add_reg"):
                 st.session_state["analysis_queue"].append({
                     "sheet_name": f"回帰分析_{res['target_var']}",
@@ -598,6 +601,16 @@ def main():
                     "fig_bytes": res["fig_bytes"]
                 })
                 st.toast("『重回帰分析結果』をレポートリストに追加しました！", icon="📋")
+
+            c_l, c_r = st.columns([2.5, 2])
+            with c_l:
+                st.write(f"**重回帰モデル分析結果表 (目的変数: {res['target_var']})**")
+                st.dataframe(res["res_df"], use_container_width=True)
+                st.caption(res["note"])
+            with c_r:
+                st.write("**実測値 vs. 予測値プロット**")
+                with st.container(height=450):
+                    st.image(res["fig_bytes"], use_container_width=True)
 
     # ------------------------------------------------------------------
     # TAB 8: 因子分析
@@ -625,16 +638,7 @@ def main():
                 
         if "fa" in st.session_state["results"]:
             res = st.session_state["results"]["fa"]
-            c_l, c_r = st.columns([2.5, 2])
-            with c_l:
-                rot_jp = "プロマックス回転" if res["rotation"] == "promax" else "バリマックス回転"
-                st.write(f"**因子負荷量行列 & 寄与率 ({rot_jp})**")
-                st.dataframe(res["res_df"], use_container_width=True)
-                st.caption(res["note"])
-            with c_r:
-                st.write("**スクリープロット**")
-                st.image(res["fig_bytes"], use_container_width=True)
-                
+            
             if st.button("➕ この結果をExcelレポートに追加", key="btn_add_fa"):
                 rot_jp = "プロマックス回転" if res["rotation"] == "promax" else "バリマックス回転"
                 st.session_state["analysis_queue"].append({
@@ -645,6 +649,17 @@ def main():
                     "fig_bytes": res["fig_bytes"]
                 })
                 st.toast("『因子分析結果』をレポートリストに追加しました！", icon="📋")
+
+            c_l, c_r = st.columns([2.5, 2])
+            with c_l:
+                rot_jp = "プロマックス回転" if res["rotation"] == "promax" else "バリマックス回転"
+                st.write(f"**因子負荷量行列 & 寄与率 ({rot_jp})**")
+                st.dataframe(res["res_df"], use_container_width=True)
+                st.caption(res["note"])
+            with c_r:
+                st.write("**スクリープロット**")
+                with st.container(height=450):
+                    st.image(res["fig_bytes"], use_container_width=True)
 
 
 if __name__ == "__main__":

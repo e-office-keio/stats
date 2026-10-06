@@ -17,30 +17,30 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import seaborn as sns
 
+# japanize_matplotlib の試行インポート (完全文字化け防止)
+try:
+    import japanize_matplotlib
+except ImportError:
+    pass
+
 # ----------------------------------------------------------------------
-# 日本語フォントの高度自動検出 (文字化け対策)
+# 日本語フォントの高度自動検出 & 設定
 # ----------------------------------------------------------------------
 def setup_japanese_font():
-    """環境に存在する日本語フォントを自動探索しMatplotlibに適用"""
-    system_fonts = [f.name for f in fm.fontManager.ttflist]
-    japanese_font_candidates = [
-        'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 
-        'Meiryo', 'TakaoPGothic', 'IPAexGothic', 'IPAGothic', 
-        'Noto Sans CJK JP', 'Arial Unicode MS'
-    ]
+    """環境に存在する日本語フォントを多角的に探索しMatplotlibに適用"""
+    mac_mac_fonts = ['Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Meiryo', 'TakaoPGothic', 'IPAexGothic', 'IPAGothic', 'Noto Sans CJK JP']
     
-    selected_font = None
-    for font in japanese_font_candidates:
-        if font in system_fonts:
-            selected_font = font
+    installed_fonts = [f.name for f in fm.fontManager.ttflist]
+    found_font = None
+    for font in mac_mac_fonts:
+        if font in installed_fonts:
+            found_font = font
             break
             
-    if selected_font:
-        plt.rcParams['font.family'] = selected_font
-        plt.rcParams['font.sans-serif'] = [selected_font] + japanese_font_candidates
-    else:
-        plt.rcParams['font.sans-serif'] = japanese_font_candidates + ['sans-serif']
-        
+    if found_font:
+        plt.rcParams['font.family'] = found_font
+        plt.rcParams['font.sans-serif'] = [found_font] + mac_mac_fonts
+    
     plt.rcParams['axes.unicode_minus'] = False
 
 setup_japanese_font()
