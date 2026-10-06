@@ -606,10 +606,6 @@ def main():
                         st.write("**平均値比較プロット**")
                         with st.container(height=450):
                             st.image(res["fig_bytes"], use_column_width=True)
-            with c_r:
-                st.write("**平均値比較プロット**")
-                with st.container(height=450):
-                    st.image(res["fig_bytes"], use_column_width=True)
 
     # ------------------------------------------------------------------
     # TAB 6: 相関分析

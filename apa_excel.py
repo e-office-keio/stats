@@ -127,7 +127,7 @@ def format_apa_table(ws, start_row, title, df, note=None, table_num=1):
     return data_info, current_row
 
 
-def add_native_excel_chart(ws, data_info, title="グラフ"):
+def add_native_excel_chart(ws, data_info, title="グラフ", max_col=None, y_title="度数 / 数値"):
     """
     Excel上でダブルクリック＆自在に編集可能な「ネイティブグラフ」を作成して挿入
     """
@@ -135,11 +135,14 @@ def add_native_excel_chart(ws, data_info, title="グラフ"):
     chart.type = "col"
     chart.style = 10
     chart.title = title
-    chart.y_axis.title = "数値 / 度数"
+    chart.y_axis.title = y_title
     chart.x_axis.title = "カテゴリ"
+    chart.legend = None  # 1列のみ表示時は凡例不要でスッキリ
+    
+    target_max_col = max_col if max_col is not None else data_info["num_cols"]
     
     # データ範囲とカテゴリ名（X軸）の参照
-    data_ref = Reference(ws, min_col=2, min_row=data_info["header_row"], max_col=data_info["num_cols"], max_row=data_info["data_end_row"])
+    data_ref = Reference(ws, min_col=2, min_row=data_info["header_row"], max_col=target_max_col, max_row=data_info["data_end_row"])
     cats_ref = Reference(ws, min_col=1, min_row=data_info["data_start_row"], max_row=data_info["data_end_row"])
     
     chart.add_data(data_ref, titles_from_data=True)
@@ -169,7 +172,7 @@ def add_image_to_sheet(ws, img_bytes, cell_location="H2"):
 def build_full_excel_report(analysis_results):
     """
     複数の分析結果（辞書形式）を受け取り、オープンピクセルWorkbookを作成してBytesIOで返す。
-    ネィティブ編集可能グラフと画像グラフの両方を埋め込み。
+    ネイティブ編集可能グラフと画像グラフの埋め込み。
     """
     wb = openpyxl.Workbook()
     wb.remove(wb.active)  # デフォルトシート削除
@@ -188,21 +191,29 @@ def build_full_excel_report(analysis_results):
         fig_bytes = item.get("fig_bytes", None)
         
         data_info = None
+        has_native_chart = False
         if df is not None and not df.empty:
             data_info, next_row = format_apa_table(ws, start_row=2, title=title, df=df, note=note, table_num=table_counter)
             table_counter += 1
             
-            # 単純集計・クロス集計・記述統計量等の場合はExcelネイティブ編集可能チャートを追加
+            # 単純集計の場合は「度数 (N)」のみ(max_col=2)を対象にした編集可能グラフを作成
             try:
-                if "単純集計" in sheet_name or "クロス" in sheet_name or "基本統計量" in sheet_name or "t検定" in sheet_name or "ANOVA" in sheet_name:
-                    add_native_excel_chart(ws, data_info, title=f"{title} (編集可能グラフ)")
+                if "単純集計" in sheet_name:
+                    add_native_excel_chart(ws, data_info, title=f"{title}", max_col=2, y_title="度数 (N)")
+                    has_native_chart = True
+                elif "クロス" in sheet_name or "基本統計量" in sheet_name or "t検定" in sheet_name or "ANOVA" in sheet_name:
+                    add_native_excel_chart(ws, data_info, title=f"{title}")
+                    has_native_chart = True
             except Exception:
                 pass  # 万が一ネイティブチャート作成不可時は画像フォールバック
         
         if fig_bytes is not None:
-            # ネイティブグラフがある場合はその下（H18）に画像配置、ない場合はH2に配置
-            img_pos = "H18" if data_info and ("単純集計" in sheet_name or "クロス" in sheet_name or "基本統計量" in sheet_name or "t検定" in sheet_name or "ANOVA" in sheet_name) else "H2"
-            add_image_to_sheet(ws, fig_bytes, cell_location=img_pos)
+            # 単純集計で編集可能ネイティブグラフが存在する場合は重複する画像グラフの挿入をスキップ
+            if "単純集計" in sheet_name and has_native_chart:
+                pass
+            else:
+                img_pos = "H18" if has_native_chart else "H2"
+                add_image_to_sheet(ws, fig_bytes, cell_location=img_pos)
             
     output = io.BytesIO()
     wb.save(output)
