@@ -1542,7 +1542,7 @@ def main():
                 if st.session_state["sem_paths"]:
                     try:
                         with st.spinner("共分散構造分析モデルの最尤推定・適合度計算・パス図描画を実行中..."):
-                            param_df, fit_df, indirect_df, note, fig_bytes = stats_engine.analyze_sem(
+                            param_df, fit_df, indirect_df, note, fig_bytes, model_meta = stats_engine.analyze_sem(
                                 df,
                                 latent_defs=st.session_state["sem_latents"],
                                 paths=st.session_state["sem_paths"],
@@ -1551,7 +1551,7 @@ def main():
                             )
                             st.session_state["results"]["sem"] = {
                                 "param_df": param_df, "fit_df": fit_df, "indirect_df": indirect_df,
-                                "note": note, "fig_bytes": fig_bytes
+                                "note": note, "fig_bytes": fig_bytes, "model_meta": model_meta
                             }
                         st.toast("共分散構造分析 (SEM) の推定が完了しました！", icon="🎉")
                     except Exception as e:
@@ -1562,22 +1562,8 @@ def main():
             # --- 結果の表示 ---
             if "sem" in st.session_state["results"]:
                 res = st.session_state["results"]["sem"]
+                model_meta = res.get("model_meta", {})
                 
-                if st.button("➕ この結果をExcelレポートに追加 (適合度表 & パラメータ表 & パス図)", key="btn_add_sem"):
-                    st.session_state["analysis_queue"].append({
-                        "sheet_name": "共分散構造分析",
-                        "title": "共分散構造分析 (SEM) パラメータ推定値一覧表",
-                        "df": res["param_df"],
-                        "note": res["note"],
-                        "extra_title": "モデル適合度指標サマリー",
-                        "extra_df": res["fit_df"],
-                        "extra_title_2": "媒介効果・間接効果の分解",
-                        "extra_df_2": res["indirect_df"],
-                        "fig_bytes": res["fig_bytes"]
-                    })
-                    st.toast("『共分散構造分析 (SEM) 結果』をレポートリストに追加しました！", icon="📋")
-                    st.rerun()
-
                 st.markdown("### 📊 分析結果サマリー")
                 
                 # 適合度のハイライト表示
@@ -1593,7 +1579,7 @@ def main():
                 with m3:
                     st.metric("χ² / df 比", f"{chi_df_val:.2f}", delta="良好 (< 2.0)" if chi_df_val < 2.0 else ("許容 (< 3.0)" if chi_df_val < 3.0 else "不良"), delta_color="inverse")
 
-                c_res_l, c_res_r = st.columns([2.6, 2.2])
+                c_res_l, c_res_r = st.columns([2.5, 2.5])
                 with c_res_l:
                     st.markdown("**1. パラメータ推定値表 (APA Style)**")
                     st.dataframe(res["param_df"], use_container_width=True)
@@ -1606,11 +1592,81 @@ def main():
                         st.markdown("**3. 媒介効果・間接効果の分解**")
                         st.dataframe(res["indirect_df"], use_container_width=True)
                         st.caption("注. 総合効果 = 直接効果 + 間接効果。媒介比率は総合効果に対する間接効果の割合を表します。")
-                        
+
                 with c_res_r:
                     st.markdown("**📐 パスダイアグラム (Path Diagram)**")
-                    with st.container(height=520):
-                        st.image(res["fig_bytes"], use_column_width=True)
+                    
+                    # パス図のカスタマイズ設定
+                    with st.expander("🎨 パス図の表示カスタマイズ設定", expanded=False):
+                        cc_1, cc_2 = st.columns(2)
+                        with cc_1:
+                            theme_choice = st.selectbox(
+                                "配色テーマ:",
+                                ["APA 標準 (ネイビー/ブルー)", "APA クラシック (白黒/グレー)", "ソフトカラー (パステル)"],
+                                key="sem_theme"
+                            )
+                            coef_choice = st.selectbox(
+                                "表示する係数:",
+                                ["標準化係数 (β)", "非標準化係数 (B)"],
+                                key="sem_coef_type"
+                            )
+                            show_r2_opt = st.checkbox("決定係数 (R²) を表示", value=True, key="sem_show_r2")
+                        with cc_2:
+                            font_sz = st.slider("文字サイズ (pt):", min_value=8, max_value=14, value=10, key="sem_font_sz")
+                            fig_w = st.slider("図の横幅 (インチ):", min_value=8.0, max_value=14.0, value=10.0, step=0.5, key="sem_fig_w")
+                            fig_h = st.slider("図の縦幅 (インチ):", min_value=4.5, max_value=8.5, value=6.0, step=0.5, key="sem_fig_h")
+                            show_ns_opt = st.checkbox("非有意なパス (点線) も表示", value=True, key="sem_show_ns")
+
+                    # カスタマイズ設定に基づきリアルタイム再描画
+                    if model_meta:
+                        curr_fig_bytes = stats_engine.render_sem_path_diagram(
+                            param_df=res["param_df"],
+                            fit_df=res["fit_df"],
+                            latent_names=model_meta.get("latent_names", []),
+                            paths=model_meta.get("paths", []),
+                            r2_map=model_meta.get("r2_map", {}),
+                            exogenous_vars=model_meta.get("exogenous_vars", []),
+                            all_model_vars=model_meta.get("all_model_vars", []),
+                            show_r2=show_r2_opt,
+                            font_size=font_sz,
+                            fig_width=fig_w,
+                            fig_height=fig_h,
+                            color_theme=theme_choice,
+                            show_fit_footer=True,
+                            coef_type=coef_choice,
+                            show_insignificant=show_ns_opt
+                        )
+                    else:
+                        curr_fig_bytes = res["fig_bytes"]
+
+                    with st.container(height=480):
+                        st.image(curr_fig_bytes, use_column_width=True)
+
+                    c_dl_img, _ = st.columns([2, 1])
+                    with c_dl_img:
+                        st.download_button(
+                            label="📥 パス図を高解像度画像で保存 (.png)",
+                            data=curr_fig_bytes,
+                            file_name="SEM_パスダイアグラム.png",
+                            mime="image/png",
+                            use_container_width=True
+                        )
+
+                st.divider()
+                if st.button("➕ この結果をExcelレポートに追加 (適合度表 & パラメータ表 & パス図)", key="btn_add_sem", type="primary"):
+                    st.session_state["analysis_queue"].append({
+                        "sheet_name": "共分散構造分析",
+                        "title": "共分散構造分析 (SEM) パラメータ推定値一覧表",
+                        "df": res["param_df"],
+                        "note": res["note"],
+                        "extra_title": "モデル適合度指標サマリー",
+                        "extra_df": res["fit_df"],
+                        "extra_title_2": "媒介効果・間接効果の分解",
+                        "extra_df_2": res["indirect_df"],
+                        "fig_bytes": curr_fig_bytes
+                    })
+                    st.toast("『共分散構造分析 (SEM) 結果』をレポートリストに追加しました！", icon="📋")
+                    st.rerun()
 
 
 

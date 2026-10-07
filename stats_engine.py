@@ -1578,21 +1578,91 @@ def analyze_sem(df, latent_defs=None, paths=None, covariances=None, auto_exogeno
     fit_df = pd.DataFrame(fit_records).set_index("指標名")
     indirect_df = pd.DataFrame(indirect_records).set_index("媒介経路") if indirect_records else pd.DataFrame()
 
-    # -------------------------------------------------------------
-    # APAスタイル パス図の自動描画 (Matplotlib)
-    # -------------------------------------------------------------
-    fig, ax = plt.subplots(figsize=(10, 6.5), dpi=300)
-    ax.set_facecolor("#fafbfc")
-    fig.patch.set_facecolor("#ffffff")
+    # パス図の描画
+    fig_bytes = render_sem_path_diagram(
+        param_df=param_df,
+        fit_df=fit_df,
+        latent_names=latent_names,
+        paths=paths,
+        r2_map=r2_map,
+        exogenous_vars=exogenous_vars,
+        all_model_vars=all_model_vars
+    )
+
+    cfi_val = fit_df.loc["CFI (適合度指数)", "値"] if "CFI (適合度指数)" in fit_df.index else 0.95
+    rmsea_val = fit_df.loc["RMSEA (二乗平均平方根誤差)", "値"] if "RMSEA (二乗平均平方根誤差)" in fit_df.index else 0.05
+    note = f"注. サンプルサイズ N = {n_sample}。CFI = {cfi_val:.3f}, RMSEA = {rmsea_val:.3f}。実線矢印は有意なパス (p < .05)、点線矢印は非有意 (ns)、点線両矢印は共分散 (相関) を表します。*** p < .001, ** p < .01, * p < .05。"
+
+    return param_df, fit_df, indirect_df, note, fig_bytes, {
+        "latent_names": list(latent_names),
+        "paths": paths,
+        "r2_map": r2_map,
+        "exogenous_vars": list(exogenous_vars),
+        "all_model_vars": list(all_model_vars)
+    }
+
+
+def render_sem_path_diagram(
+    param_df, fit_df, latent_names, paths, r2_map, exogenous_vars, all_model_vars,
+    show_r2=True,
+    font_size=10,
+    fig_width=10.0,
+    fig_height=6.0,
+    color_theme="APA 標準 (ネイビー/ブルー)",
+    show_fit_footer=True,
+    coef_type="標準化係数 (β)",
+    show_insignificant=True
+):
+    """
+    APAスタイルのSEM / パス解析 ダイアグラムを描画
+    - 上部タイトルは入れない
+    - 図の下部に適合度指標を横並びで記載
+    - Web画面からのカスタマイズに対応
+    """
+    setup_japanese_font()
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height), dpi=300)
+    
+    # カラーテーマの設定
+    if "白黒" in color_theme or "クラシック" in color_theme:
+        bg_color = "#ffffff"
+        latent_bg = "#f1f5f9"
+        latent_ec = "#0f172a"
+        obs_bg = "#ffffff"
+        obs_ec = "#0f172a"
+        arrow_sig_color = "#0f172a"
+        arrow_ns_color = "#94a3b8"
+        cov_color = "#475569"
+        text_color = "#0f172a"
+    elif "ソフト" in color_theme or "パステル" in color_theme:
+        bg_color = "#fdfbf7"
+        latent_bg = "#fef3c7"
+        latent_ec = "#d97706"
+        obs_bg = "#ecfdf5"
+        obs_ec = "#059669"
+        arrow_sig_color = "#1d4ed8"
+        arrow_ns_color = "#9ca3af"
+        cov_color = "#7c3aed"
+        text_color = "#1e293b"
+    else:  # APA 標準 (ネイビー/ブルー)
+        bg_color = "#ffffff"
+        latent_bg = "#e0f2fe"
+        latent_ec = "#0284c7"
+        obs_bg = "#f8fafc"
+        obs_ec = "#334155"
+        arrow_sig_color = "#1e3a8a"
+        arrow_ns_color = "#94a3b8"
+        cov_color = "#64748b"
+        text_color = "#0f172a"
+
+    ax.set_facecolor(bg_color)
+    fig.patch.set_facecolor(bg_color)
     
     # ノード位置の階層自動配置 (左から右へ: 外生 -> 媒介 -> 内生)
-    # 各変数の深さ (depth) を計算
     depths = {}
     for v in all_model_vars:
         if v in exogenous_vars:
             depths[v] = 0
             
-    # 最大3反復で深さを更新
     for _ in range(4):
         for p in paths:
             f, t = p["from"], p["to"]
@@ -1606,41 +1676,50 @@ def analyze_sem(df, latent_defs=None, paths=None, covariances=None, auto_exogeno
             depth_groups[d] = []
         depth_groups[d].append(v)
 
-    # 座標の計算
+    # 座標の計算 (下部にフッターがあるため y 範囲を 0.18 〜 0.90 に調整)
     pos = {}
+    y_bottom = 0.20 if show_fit_footer else 0.12
+    y_top = 0.90
     for d, v_list in depth_groups.items():
-        x = 0.15 + (0.70 * (d / max(1, max_depth)))
+        x = 0.14 + (0.72 * (d / max(1, max_depth)))
         n_in_col = len(v_list)
         for i, v in enumerate(v_list):
-            y = 0.85 - (0.70 * (i / max(1, n_in_col - 1))) if n_in_col > 1 else 0.50
+            y = y_top - ((y_top - y_bottom) * (i / max(1, n_in_col - 1))) if n_in_col > 1 else (y_top + y_bottom) / 2
             pos[v] = (x, y)
+
+    # 係数列の選択
+    coef_col = "標準化係数 (β)" if "β" in coef_type else "非標準化係数 (B)"
+    coef_symbol = "β" if "β" in coef_type else "B"
 
     # パス (矢印) の描画
     for p in paths:
         f, t = p["from"], p["to"]
         if f in pos and t in pos:
             p_str = f"{f} → {t}"
-            beta_val = param_df.loc[p_str, "標準化係数 (β)"] if p_str in param_df.index else 0.0
+            coef_val = param_df.loc[p_str, coef_col] if p_str in param_df.index else 0.0
             p_val = param_df.loc[p_str, "p値"] if p_str in param_df.index else 1.0
             
-            # 有意性アスタリスク
+            is_sig = p_val < 0.05
+            if not is_sig and not show_insignificant:
+                continue
+
             ast = "***" if p_val < 0.001 else ("**" if p_val < 0.01 else ("*" if p_val < 0.05 else " ns"))
-            line_style = "-" if p_val < 0.05 else "--"
-            line_color = "#1e3a8a" if p_val < 0.05 else "#94a3b8"
-            line_w = 2.0 if p_val < 0.05 else 1.2
+            line_style = "-" if is_sig else "--"
+            line_color = arrow_sig_color if is_sig else arrow_ns_color
+            line_w = 2.0 if is_sig else 1.2
             
             x1, y1 = pos[f]
             x2, y2 = pos[t]
             
             # 矢印を描画
             ax.annotate(
-                "", xy=(x2 - 0.06, y2), xytext=(x1 + 0.06, y1),
+                "", xy=(x2 - 0.065, y2), xytext=(x1 + 0.065, y1),
                 arrowprops=dict(arrowstyle="-|>", color=line_color, lw=line_w, linestyle=line_style, mutation_scale=15)
             )
             # 係数ラベルの配置 (中央)
             mid_x = (x1 + x2) / 2
             mid_y = (y1 + y2) / 2 + 0.03
-            ax.text(mid_x, mid_y, f"β = {beta_val:.2f}{ast}", fontsize=9.5, fontweight="bold", color=line_color,
+            ax.text(mid_x, mid_y, f"{coef_symbol} = {coef_val:.2f}{ast}", fontsize=font_size - 1, fontweight="bold", color=line_color,
                     ha="center", va="center", bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.85))
 
     # 共分散 (双方向点線矢印) の描画
@@ -1654,45 +1733,63 @@ def analyze_sem(df, latent_defs=None, paths=None, covariances=None, auto_exogeno
                     drawn_covs.add((v1, v2))
                     x1, y1 = pos[v1]
                     x2, y2 = pos[v2]
-                    beta_cov = r["標準化係数 (β)"]
+                    beta_cov = r[coef_col] if coef_col in r else r["標準化係数 (β)"]
                     rad = -0.3 if x1 == x2 else 0.25
                     ax.annotate(
                         "", xy=(x1, y1 + 0.05), xytext=(x2, y2 + 0.05),
-                        arrowprops=dict(arrowstyle="<|-|>", color="#64748b", lw=1.2, linestyle=":", connectionstyle=f"arc3,rad={rad}", mutation_scale=12)
+                        arrowprops=dict(arrowstyle="<|-|>", color=cov_color, lw=1.2, linestyle=":", connectionstyle=f"arc3,rad={rad}", mutation_scale=12)
                     )
                     # 相関係数テキスト
                     cx = (x1 + x2) / 2
-                    cy = max(y1, y2) + 0.10
-                    ax.text(cx, cy, f"r = {beta_cov:.2f}", fontsize=8.5, color="#64748b", ha="center", va="center",
-                            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.8))
+                    cy = max(y1, y2) + 0.09
+                    cov_sym = "r" if "β" in coef_type else "Cov"
+                    ax.text(cx, cy, f"{cov_sym} = {beta_cov:.2f}", fontsize=font_size - 2, color=cov_color, ha="center", va="center",
+                            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.85))
 
     # ノード（ボックス・楕円）の描画
     for v, (x, y) in pos.items():
         is_latent = v in latent_names
-        # 潜在変数は楕円、観測変数は角丸長方形
-        b_color = "#e0f2fe" if is_latent else "#ffffff"
-        ec_color = "#0284c7" if is_latent else "#334155"
+        b_color = latent_bg if is_latent else obs_bg
+        ec_color = latent_ec if is_latent else obs_ec
         b_style = "round,pad=0.5" if is_latent else "square,pad=0.4"
         lw = 2.0 if is_latent else 1.5
         
         # 決定係数 R² の表示 (内生変数の場合)
-        r2_text = f"\n(R² = {r2_map[v]:.2f})" if v in r2_map else ""
+        r2_text = f"\n(R² = {r2_map[v]:.2f})" if (show_r2 and v in r2_map) else ""
         
-        ax.text(x, y, f"{v}{r2_text}", fontsize=10, fontweight="bold", color="#0f172a",
+        ax.text(x, y, f"{v}{r2_text}", fontsize=font_size, fontweight="bold", color=text_color,
                 ha="center", va="center",
                 bbox=dict(boxstyle=b_style, fc=b_color, ec=ec_color, lw=lw, alpha=0.95))
+
+    # 図の下部に適合度指標を横並びで記載 (フッター)
+    if show_fit_footer and fit_df is not None and not fit_df.empty:
+        fit_items = []
+        if "カイ二乗値 (χ²)" in fit_df.index:
+            chi_val = fit_df.loc["カイ二乗値 (χ²)", "値"]
+            df_val = int(fit_df.loc["自由度 (df)", "値"]) if "自由度 (df)" in fit_df.index else 0
+            p_val = fit_df.loc["カイ二乗検定 p値", "値"] if "カイ二乗検定 p値" in fit_df.index else 0.0
+            p_str = "< .001" if p_val < 0.001 else f"= {p_val:.3f}".replace("0.", ".")
+            fit_items.append(f"χ²({df_val}) = {chi_val:.2f} (p {p_str})")
+        if "CFI (適合度指数)" in fit_df.index:
+            fit_items.append(f"CFI = {fit_df.loc['CFI (適合度指数)', '値']:.3f}".replace("0.", "."))
+        if "TLI / NNFI" in fit_df.index:
+            fit_items.append(f"TLI = {fit_df.loc['TLI / NNFI', '値']:.3f}".replace("0.", "."))
+        if "RMSEA (二乗平均平方根誤差)" in fit_df.index:
+            fit_items.append(f"RMSEA = {fit_df.loc['RMSEA (二乗平均平方根誤差)', '値']:.3f}".replace("0.", "."))
+        if "SRMR (標準化残差平均)" in fit_df.index:
+            fit_items.append(f"SRMR = {fit_df.loc['SRMR (標準化残差平均)', '値']:.3f}".replace("0.", "."))
+
+        footer_text = " | ".join(fit_items)
+        ax.text(0.5, 0.05, f"適合度指標:  {footer_text}", fontsize=font_size - 1.5, color="#334155",
+                ha="center", va="center", style="italic",
+                bbox=dict(boxstyle="round,pad=0.35", fc="#f1f5f9", ec="#cbd5e1", lw=0.8, alpha=0.9))
 
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.0)
     ax.axis("off")
-    ax.set_title("共分散構造分析 / パス解析 パスダイアグラム (Path Diagram)", fontsize=13, fontweight="bold", pad=15)
+    # 上部タイトルは完全に除外 (ax.set_title は呼ばない)
     plt.tight_layout()
     fig_bytes = fig_to_bytes(fig)
-
-    cfi_val = fit_df.loc["CFI (適合度指数)", "値"] if "CFI (適合度指数)" in fit_df.index else 0.95
-    rmsea_val = fit_df.loc["RMSEA (二乗平均平方根誤差)", "値"] if "RMSEA (二乗平均平方根誤差)" in fit_df.index else 0.05
-    note = f"注. サンプルサイズ N = {n_sample}。CFI = {cfi_val:.3f}, RMSEA = {rmsea_val:.3f}。実線矢印は有意なパス (p < .05)、点線矢印は非有意 (ns)、点線両矢印は共分散 (相関) を表します。*** p < .001, ** p < .01, * p < .05。"
-
-    return param_df, fit_df, indirect_df, note, fig_bytes
+    return fig_bytes
 
 
