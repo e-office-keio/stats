@@ -1219,6 +1219,7 @@ def main():
         # 11. 因子分析
         if "11. 因子分析" in stat_method_4:
             st.subheader("11. 探索的因子分析 (Exploratory Factor Analysis)")
+            st.caption("負荷量の大きさで項目をソートし、共通性 (h²) の算出および主因子負荷量の太字表示に対応しています。")
             c1, c2, c3 = st.columns(3)
             with c1:
                 fa_vars = st.multiselect("因子分析に投入する観測変数:", numeric_columns, default=valid_num_cols[:min(6, len(valid_num_cols))], key="fa_vars")
@@ -1230,25 +1231,26 @@ def main():
             if st.button("🚀 因子分析を実行", key="run_fa", type="primary"):
                 if len(fa_vars) >= 3:
                     with st.spinner("因子分析とスクリープロットを実行中..."):
-                        res_df, note, fig_bytes = stats_engine.analyze_factor_analysis(df, fa_vars, n_factors=int(n_factors), rotation=rotation)
+                        res_df, note, fig_bytes, scree_df = stats_engine.analyze_factor_analysis(df, fa_vars, n_factors=int(n_factors), rotation=rotation)
                         st.session_state["results"]["fa"] = {
-                            "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "rotation": rotation
+                            "res_df": res_df, "note": note, "fig_bytes": fig_bytes, "scree_df": scree_df, "rotation": rotation
                         }
-                    st.toast("因子分析が完了しました！", icon="✅")
+                    st.toast("因子分析が完了しました！ (項目を負荷量順にソートしました)", icon="✅")
                 else:
                     st.warning("因子分析には3つ以上の観測変数を選択してください。")
                     
             if "fa" in st.session_state["results"]:
                 res = st.session_state["results"]["fa"]
                 
-                if st.button("➕ この結果をExcelレポートに追加", key="btn_add_fa"):
+                if st.button("➕ この結果をExcelレポートに追加 (編集可能スクリープロット付き)", key="btn_add_fa"):
                     rot_jp = "プロマックス回転" if res["rotation"] == "promax" else "バリマックス回転"
                     st.session_state["analysis_queue"].append({
                         "sheet_name": "因子分析",
                         "title": f"探索的因子分析結果 ({rot_jp})",
                         "df": res["res_df"],
                         "note": res["note"],
-                        "fig_bytes": res["fig_bytes"]
+                        "fig_bytes": res["fig_bytes"],
+                        "scree_df": res.get("scree_df", None)
                     })
                     st.toast("『因子分析結果』をレポートリストに追加しました！", icon="📋")
                     st.rerun()
@@ -1256,29 +1258,34 @@ def main():
                 c_l, c_r = st.columns([2.5, 2])
                 with c_l:
                     rot_jp = "プロマックス回転" if res["rotation"] == "promax" else "バリマックス回転"
-                    st.write(f"**因子負荷量行列 & 寄与率 ({rot_jp})**")
+                    st.write(f"**因子負荷量行列・共通性 (h²) & 寄与率 ({rot_jp})**")
                     st.dataframe(res["res_df"], use_container_width=True)
                     st.caption(res["note"])
                 with c_r:
-                    st.write("**スクリープロット**")
+                    st.write("**スクリープロット (固有値の推移)**")
                     with st.container(height=450):
                         st.image(res["fig_bytes"], use_column_width=True)
 
         # 12. 尺度信頼性分析
         elif "12. 信頼性分析" in stat_method_4:
             st.subheader("12. 尺度信頼性分析 (Scale Reliability / Cronbach's Alpha)")
-            st.caption("アンケート尺度などの内的一貫性をクロンバックのα係数、項目-全体相関、項目削除時αで評価します。")
+            st.caption("アンケート尺度などの内的一貫性をクロンバックのα係数で評価し、逆転項目（負の相関）を自動判別します。")
             rel_vars = st.multiselect("信頼性を分析する尺度項目 (数値変数):", numeric_columns, default=valid_num_cols[:min(5, len(valid_num_cols))], key="rel_vars")
             
             if st.button("🚀 信頼性分析を実行", key="run_rel", type="primary"):
                 if len(rel_vars) >= 2:
                     try:
-                        with st.spinner("クロンバックのα係数と項目統計量を計算中..."):
-                            rel_df, note, fig_bytes, alpha_val = stats_engine.analyze_reliability(df, rel_vars)
+                        with st.spinner("クロンバックのα係数と逆転項目の判定を実行中..."):
+                            rel_df, note, fig_bytes, alpha_val, alpha_corr, rev_candidates = stats_engine.analyze_reliability(df, rel_vars)
                             st.session_state["results"]["rel"] = {
-                                "rel_df": rel_df, "note": note, "fig_bytes": fig_bytes, "alpha_val": alpha_val, "rel_vars": rel_vars
+                                "rel_df": rel_df, "note": note, "fig_bytes": fig_bytes, 
+                                "alpha_val": alpha_val, "alpha_corr": alpha_corr, 
+                                "rev_candidates": rev_candidates, "rel_vars": rel_vars
                             }
-                        st.toast(f"信頼性分析が完了しました！ (全体 α = {alpha_val:.3f})", icon="✅")
+                        if rev_candidates:
+                            st.toast(f"信頼性分析完了: 逆転項目の可能性あり ({', '.join(rev_candidates)})", icon="⚠️")
+                        else:
+                            st.toast(f"信頼性分析が完了しました！ (全体 α = {alpha_val:.3f})", icon="✅")
                     except Exception as e:
                         st.error(f"分析エラー: {e}")
                 else:
@@ -1287,7 +1294,19 @@ def main():
             if "rel" in st.session_state["results"]:
                 res = st.session_state["results"]["rel"]
                 
-                if st.button("➕ この結果をExcelレポートに追加", key="btn_add_rel"):
+                # 逆転項目のアラートと反転時αの提示
+                if res.get("rev_candidates"):
+                    rev_list_str = ", ".join([f"`{v}`" for v in res["rev_candidates"]])
+                    st.warning(
+                        f"⚠️ **逆転項目（負の項目-全体相関）が検出されました**: {rev_list_str}\n\n"
+                        f"- 現行の全体 α: **`{res['alpha_val']:.3f}`**\n"
+                        f"- 該当項目を**反転補正した場合の推定 α**: **`{res.get('alpha_corr', 0.0):.3f}`** （大幅に向上します）\n"
+                        f"- ※上部のデータ前処理メニュー『⑤ 逆転項目の反転』で反転変数を作成して再分析することを推奨します。"
+                    )
+                else:
+                    st.success(f"✅ 全ての項目が正の相関を示しています。(全体 α = **`{res['alpha_val']:.3f}`**)")
+                
+                if st.button("➕ この結果をExcelレポートに追加 (編集可能グラフ付き)", key="btn_add_rel"):
                     st.session_state["analysis_queue"].append({
                         "sheet_name": "信頼性分析",
                         "title": f"尺度項目の信頼性分析表 (全体 α = {res['alpha_val']:.3f})",

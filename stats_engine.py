@@ -825,9 +825,17 @@ def analyze_regression(df, target_var, feature_vars):
 # 8. 因子分析 (Exploratory Factor Analysis)
 # ----------------------------------------------------------------------
 def analyze_factor_analysis(df, num_vars, n_factors=2, rotation="promax"):
-    """探索的因子分析"""
+    """
+    探索的因子分析
+    - 因子負荷量の大きさで項目をソート
+    - 各項目の主因子（最大負荷量）の特定
+    - 共通性 (h^2) の算出
+    - スクリープロット用固有値データの生成
+    """
     set_apa_plot_style()
     clean_df = df[num_vars].dropna()
+    k = len(num_vars)
+    n_factors = min(n_factors, k)
     
     factor_cols = [f"第{i+1}因子" for i in range(n_factors)]
     
@@ -836,34 +844,22 @@ def analyze_factor_analysis(df, num_vars, n_factors=2, rotation="promax"):
         fa = FactorAnalyzer(n_factors=n_factors, rotation=rotation, method='principal')
         fa.fit(clean_df)
         
-        loadings = pd.DataFrame(
-            fa.loadings_,
-            index=num_vars,
-            columns=factor_cols
-        )
-        
+        raw_loadings = fa.loadings_
         ev, v = fa.get_eigenvalues()
         var_explained = fa.get_factor_variance()
-        variance_df = pd.DataFrame(
-            var_explained,
-            index=["因子負荷量二乗和", "分散説明率 (寄与率)", "累積分散説明率 (累積寄与率)"],
-            columns=factor_cols
-        )
         
     except Exception:
-        # factor_analyzer の非互換性またはインポート失敗時の堅牢なPCAフォールバック
+        # factor_analyzer 非互換時の堅牢なPCA/Varimaxフォールバック
         from sklearn.decomposition import PCA
         scaler_df = (clean_df - clean_df.mean()) / clean_df.std(ddof=0)
-        pca = PCA(n_components=min(len(num_vars), n_factors))
+        pca = PCA(n_components=n_factors)
         pca.fit(scaler_df)
         
-        # 因子負荷量 (PCA成分 × 各主成分の標準偏差)
         raw_loadings = pca.components_.T * np.sqrt(pca.explained_variance_)
         
-        # 単純バリマックス回転 (直交回転アルゴリズム)
+        # バリマックス回転
         if rotation in ["varimax", "promax"] and raw_loadings.shape[1] > 1:
             gamma = 1.0
-            q, r = np.linalg.qr(raw_loadings)
             x = raw_loadings
             for _ in range(50):
                 d = np.diag(np.sum(x**2, axis=0))
@@ -872,28 +868,53 @@ def analyze_factor_analysis(df, num_vars, n_factors=2, rotation="promax"):
                 x = raw_loadings @ rot_matrix
             raw_loadings = x
             
-        loadings = pd.DataFrame(
-            raw_loadings,
-            index=num_vars,
-            columns=factor_cols[:raw_loadings.shape[1]]
-        )
-        
-        # 全固有値の計算
         cov_mat = np.cov(scaler_df.T)
         ev = np.real(np.sort(np.linalg.eigvals(cov_mat))[::-1])
         
-        # 分散説明率
         ss_loadings = np.sum(raw_loadings**2, axis=0)
-        prop_var = ss_loadings / len(num_vars)
+        prop_var = ss_loadings / k
         cum_var = np.cumsum(prop_var)
-        
-        variance_df = pd.DataFrame([
-            ss_loadings,
-            prop_var,
-            cum_var
-        ], index=["因子負荷量二乗和", "分散説明率 (寄与率)", "累積分散説明率 (累積寄与率)"], columns=factor_cols[:raw_loadings.shape[1]])
+        var_explained = (ss_loadings, prop_var, cum_var)
 
-
+    # 1. 因子負荷量 DataFrame
+    loadings_df = pd.DataFrame(
+        raw_loadings,
+        index=num_vars,
+        columns=factor_cols[:raw_loadings.shape[1]]
+    )
+    
+    # 2. 共通性 (h^2) の算出 (各項目の負荷量二乗和)
+    communalities = (loadings_df ** 2).sum(axis=1).round(3)
+    loadings_df["共通性 (h²)"] = communalities
+    
+    # 3. 負荷量の大きさで項目をソート
+    # 各項目について、最も絶対値が大きい因子（主因子）を判定
+    sub_loadings = loadings_df[factor_cols[:raw_loadings.shape[1]]]
+    abs_loadings = sub_loadings.abs()
+    primary_factor = abs_loadings.idxmax(axis=1)
+    max_loading_val = abs_loadings.max(axis=1)
+    
+    sort_helper = pd.DataFrame({
+        "primary_factor": primary_factor,
+        "max_loading": max_loading_val
+    }, index=num_vars)
+    
+    # 主因子の順（第1因子→第2因子...）、同一因子内では負荷量の降順でソート
+    factor_order_map = {f: i for i, f in enumerate(factor_cols)}
+    sort_helper["factor_rank"] = sort_helper["primary_factor"].map(factor_order_map)
+    sorted_index = sort_helper.sort_values(by=["factor_rank", "max_loading"], ascending=[True, False]).index
+    
+    sorted_loadings_df = loadings_df.loc[sorted_index]
+    
+    # 4. 分散説明率（統計値行）の作成
+    variance_df = pd.DataFrame(
+        var_explained,
+        index=["因子寄与 (負荷量二乗和)", "寄与率 (分散説明率)", "累積寄与率 (累積分散説明率)"],
+        columns=factor_cols[:raw_loadings.shape[1]]
+    )
+    variance_df["共通性 (h²)"] = np.nan
+    
+    # スクリープロット
     ev_real = np.real(ev)
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.plot(range(1, len(ev_real) + 1), ev_real, marker='o', color='#2b5c8f', linewidth=2)
@@ -901,22 +922,35 @@ def analyze_factor_analysis(df, num_vars, n_factors=2, rotation="promax"):
     ax.set_title("スクリープロット (固有値の推移)")
     ax.set_xlabel("因子番号")
     ax.set_ylabel("固有値 (Eigenvalue)")
+    ax.set_xticks(range(1, len(ev_real) + 1))
     ax.legend()
     plt.tight_layout()
     fig_bytes = fig_to_bytes(fig)
     
     rot_jp = "プロマックス回転" if rotation == "promax" else "バリマックス回転"
-    note = f"因子回転法: {rot_jp}。総サンプル数 N = {len(clean_df)}。"
+    note = f"注. 因子回転法: {rot_jp}。主因子の負荷量順に項目をソート済み。太字は各項目の主因子負荷量を表します。総サンプル数 N = {len(clean_df)}。"
     
-    combined_df = pd.concat([loadings, variance_df], axis=0)
-    return combined_df, note, fig_bytes
+    combined_df = pd.concat([sorted_loadings_df, variance_df], axis=0)
+    
+    # スクリープロット用の数値データ（Excelネイティブチャート用）
+    scree_df = pd.DataFrame({
+        "因子番号": [f"第{i}因子" for i in range(1, len(ev_real) + 1)],
+        "固有値": ev_real.round(3),
+        "基準値 (1.0)": [1.0] * len(ev_real)
+    }).set_index("因子番号")
+    
+    return combined_df, note, fig_bytes, scree_df
 
 
 # ----------------------------------------------------------------------
-# 9. 尺度信頼性分析 (Cronbach's Alpha)
+# 9. 尺度信頼性分析 (Cronbach's Alpha & 逆転項目自動判別)
 # ----------------------------------------------------------------------
 def analyze_reliability(df, num_vars):
-    """尺度信頼性分析 (クロンバックのα係数 & 項目削除時α & 項目-全体相関)"""
+    """
+    尺度信頼性分析
+    - クロンバックのα係数 & 項目削除時α & 項目-全体相関
+    - 逆転項目（負の項目-全体相関）の自動判別と反転時αの算出
+    """
     set_apa_plot_style()
     clean_df = df[num_vars].dropna()
     k = len(num_vars)
@@ -926,42 +960,68 @@ def analyze_reliability(df, num_vars):
     if n < 3:
         raise ValueError("有効サンプルサイズが不足しています (N >= 3)。")
         
-    item_vars = clean_df.var(axis=0, ddof=1)
-    total_score = clean_df.sum(axis=1)
-    total_var = total_score.var(ddof=1)
-    alpha = (k / (k - 1)) * (1 - item_vars.sum() / total_var) if total_var > 0 else 0.0
+    def calc_cronbach_alpha(data_df):
+        k_items = data_df.shape[1]
+        if k_items < 2:
+            return np.nan
+        item_v = data_df.var(axis=0, ddof=1)
+        tot_v = data_df.sum(axis=1).var(ddof=1)
+        if tot_v <= 0:
+            return 0.0
+        return (k_items / (k_items - 1)) * (1 - item_v.sum() / tot_v)
+
+    # 1. 現状のデータでの計算
+    alpha = calc_cronbach_alpha(clean_df)
     
     records = []
+    reversed_candidates = []
+    
     for var in num_vars:
         s = clean_df[var]
         other_vars = [v for v in num_vars if v != var]
         scale_without = clean_df[other_vars].sum(axis=1)
         r, _ = stats.pearsonr(s, scale_without) if scale_without.std() > 0 and s.std() > 0 else (0.0, 1.0)
         
-        k_sub = len(other_vars)
-        if k_sub >= 2:
-            sub_vars = clean_df[other_vars].var(axis=0, ddof=1)
-            sub_tot_var = scale_without.var(ddof=1)
-            sub_alpha = (k_sub / (k_sub - 1)) * (1 - sub_vars.sum() / sub_tot_var) if sub_tot_var > 0 else 0.0
-        else:
-            sub_alpha = np.nan
+        sub_alpha = calc_cronbach_alpha(clean_df[other_vars])
+        
+        is_rev = r < 0.0
+        if is_rev:
+            reversed_candidates.append(var)
             
         records.append({
             "項目名": var,
             "平均値 (M)": s.mean(),
             "標準偏差 (SD)": s.std(),
             "修正項目-全体相関 (r)": r,
-            "項目削除時 α": sub_alpha
+            "項目削除時 α": sub_alpha,
+            "逆転項目の判定": "⚠️ 要反転 (負の相関)" if is_rev else "正常"
         })
         
     res_df = pd.DataFrame(records).set_index("項目名")
     
+    # 2. 逆転項目が検出された場合、反転補正後のαを算出
+    alpha_corrected = None
+    corrected_note = ""
+    if reversed_candidates:
+        corrected_df = clean_df.copy()
+        for r_var in reversed_candidates:
+            min_v = corrected_df[r_var].min()
+            max_v = corrected_df[r_var].max()
+            corrected_df[r_var] = (min_v + max_v) - corrected_df[r_var]
+        alpha_corrected = calc_cronbach_alpha(corrected_df)
+        corrected_note = f" ※逆転項目候補 ({', '.join(reversed_candidates)}) を反転補正した場合の推定 α = {alpha_corrected:.3f}。"
+
     # プロット: 項目削除時アルファの棒グラフと全体アルファ基準線
-    fig, ax = plt.subplots(figsize=(6, max(3.5, k * 0.45)))
+    fig, ax = plt.subplots(figsize=(6.5, max(3.5, k * 0.45)))
     y_pos = np.arange(k)
     alpha_dels = [r["項目削除時 α"] for r in records]
-    ax.barh(y_pos, alpha_dels, color="#2b5c8f", edgecolor="black", height=0.55)
+    colors = ['#d9534f' if r["修正項目-全体相関 (r)"] < 0 else '#2b5c8f' for r in records]
+    
+    ax.barh(y_pos, alpha_dels, color=colors, edgecolor="black", height=0.55)
     ax.axvline(alpha, color="red", linestyle="--", linewidth=1.5, label=f"全体 α = {alpha:.3f}")
+    if alpha_corrected is not None:
+        ax.axvline(alpha_corrected, color="green", linestyle=":", linewidth=2, label=f"反転補正後 α = {alpha_corrected:.3f}")
+        
     ax.set_yticks(y_pos)
     ax.set_yticklabels(num_vars)
     ax.invert_yaxis()
@@ -972,8 +1032,8 @@ def analyze_reliability(df, num_vars):
     plt.tight_layout()
     fig_bytes = fig_to_bytes(fig)
     
-    note = f"注. 全体尺度 (k = {k}): クロンバックの α = {alpha:.3f}, 平均合計得点 = {total_score.mean():.2f} (SD = {total_score.std():.2f}), サンプルサイズ N = {n}。"
-    return res_df, note, fig_bytes, alpha
+    note = f"注. 全体尺度 (k = {k}): 現行のクロンバックの α = {alpha:.3f}。サンプルサイズ N = {n}。{corrected_note}"
+    return res_df, note, fig_bytes, alpha, alpha_corrected, reversed_candidates
 
 
 # ----------------------------------------------------------------------
