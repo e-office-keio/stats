@@ -152,21 +152,20 @@ def main():
                 st.rerun()
 
         st.divider()
-        with st.expander("🛠 日本語フォント診断 (Streamlit Cloud確認用)"):
-            has_jap = getattr(stats_engine, "HAS_JAPANIZE", False)
-            jap_err = getattr(stats_engine, "JAPANIZE_ERROR", "")
-            if has_jap:
-                st.success("✅ `japanize-matplotlib` 読み込み成功")
-            else:
-                st.error("❌ `japanize-matplotlib` 未適用")
-                if jap_err:
-                    st.code(f"エラー詳細: {jap_err}", language="text")
-                
-            import matplotlib.pyplot as plt
-            current_font = plt.rcParams.get("font.family", ["不明"])
-            if isinstance(current_font, list):
-                current_font = current_font[0]
-            st.caption(f"現在のMatplotlibフォント: `{current_font}`")
+        st.header("🎨 グラフ設定")
+        avail_fonts = stats_engine.get_available_japanese_fonts()
+        font_labels = [label for label, fname in avail_fonts]
+        font_map = {label: fname for label, fname in avail_fonts}
+        
+        selected_font_label = st.selectbox(
+            "グラフの日本語フォント:",
+            font_labels,
+            index=0,
+            key="selected_font_label"
+        )
+        selected_font_name = font_map[selected_font_label]
+        stats_engine.set_current_font(selected_font_name)
+        st.caption(f"適用中: `{selected_font_name}`")
 
     # データフレームの初期ロード処理
     if uploaded_file is None:
@@ -223,6 +222,21 @@ def main():
 
     st.caption(f"現在の分析対象データ: {df.shape[0]}行 × {df.shape[1]}列")
 
+    # 変数列の分類 & ID様変数の事前判定・除外 (前処理・分析共通)
+    all_columns = df.columns.tolist()
+    numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+
+    # デフォルト選択用の「ID様変数を除外した変数リスト」
+    valid_all_cols = [c for c in all_columns if not is_id_like_column(c, df[c])]
+    valid_num_cols = [c for c in numeric_columns if not is_id_like_column(c, df[c])]
+    if not valid_all_cols:
+        valid_all_cols = all_columns
+    if not valid_num_cols:
+        valid_num_cols = numeric_columns
+    valid_cat_cols = [c for c in valid_all_cols if c not in numeric_columns or df[c].nunique() <= 10]
+    if not valid_cat_cols:
+        valid_cat_cols = valid_all_cols
+
     # ------------------------------------------------------------------
     # データ前処理・リコード・フィルタリング セクション
     # ------------------------------------------------------------------
@@ -244,7 +258,7 @@ def main():
                 proc_tool = st.selectbox(
                     "実行するツールを選択:",
                     [
-                        "① 特定値の除外 (無効値 -99等の行を削除)",
+                        "① 特定値の除外 (無効値 -99等の行を一括削除)",
                         "⑦ 欠損値の処理 (リストワイズ削除 / 平均・中央値補完)",
                         "⑧ 複数条件データ抽出 (AND / OR フィルタ)"
                     ],
@@ -273,147 +287,184 @@ def main():
 
         st.divider()
 
-        # --- ① 特定値の除外 ---
+        # --- ① 特定値の除外 (複数変数対応) ---
         if "① 特定値の除外" in proc_tool:
-            st.markdown("**指定した変数から特定の無効値（例: -99, 99, '無回答' など）を除外します。**")
+            st.markdown("**指定した複数変数から、無効値（例: -99, 99, '無回答' など）を含む行を一括で除外します。**")
             col_ex1, col_ex2 = st.columns(2)
             with col_ex1:
-                target_ex_var = st.selectbox("対象の変数を選択:", df.columns, key="ex_var")
+                target_ex_vars = st.multiselect("対象の変数を選択 (複数選択可):", valid_all_cols, default=[valid_all_cols[0]] if valid_all_cols else [], key="ex_vars")
             with col_ex2:
-                unique_vals = df[target_ex_var].dropna().unique().tolist()
-                vals_to_exclude = st.multiselect("除外したい値を選択:", unique_vals, key="ex_vals")
+                if target_ex_vars:
+                    # 選択された全変数のユニーク値を集約
+                    all_uniques = []
+                    for v in target_ex_vars:
+                        all_uniques.extend(df[v].dropna().unique().tolist())
+                    unique_vals = sorted(list(set(all_uniques)), key=lambda x: str(x))
+                else:
+                    unique_vals = []
+                vals_to_exclude = st.multiselect("除外したい値を選択 (該当する行が削除されます):", unique_vals, key="ex_vals")
                 
             if st.button("🚫 指定した値の行を除外してデータを更新", key="btn_apply_ex"):
-                if vals_to_exclude:
-                    new_df = stats_engine.filter_exclude_values(df, target_ex_var, vals_to_exclude)
+                if target_ex_vars and vals_to_exclude:
+                    new_df = stats_engine.filter_exclude_values(df, target_ex_vars, vals_to_exclude)
                     st.session_state["df"] = new_df
-                    st.toast(f"『{target_ex_var}』から {vals_to_exclude} を除外しました ({len(df)}行 → {len(new_df)}行)", icon="✂️")
+                    st.toast(f"{len(target_ex_vars)} 変数から {vals_to_exclude} を除外しました ({len(df)}行 → {len(new_df)}行)", icon="✂️")
+                    st.rerun()
+                else:
+                    st.warning("対象の変数と除外する値をそれぞれ1つ以上選択してください。")
+
+        # --- ② 値のリコード (複数変数対応 & 動的変数名) ---
+        elif "② 値のリコード" in proc_tool:
+            st.markdown("**変数の特定の値を別の値に置き換えて新しい変数を作成します（複数変数への一括適用に対応）。**")
+            rec_vars = st.multiselect("リコード元の変数を選択 (複数選択可):", valid_all_cols, default=[valid_all_cols[0]] if valid_all_cols else [], key="rec_vars")
+            
+            c_r_opt1, c_r_opt2 = st.columns(2)
+            with c_r_opt1:
+                rec_suffix = st.text_input("新変数の末尾 (接尾辞):", value="_recoded", key="rec_suffix")
+            with c_r_opt2:
+                if rec_vars:
+                    preview_names = [f"`{v}{rec_suffix}`" for v in rec_vars]
+                    st.caption(f"✨ 作成される新変数名:\n{', '.join(preview_names)}")
+                else:
+                    st.caption("変数を1つ以上選択してください。")
+
+            if rec_vars:
+                # 選択された全変数のユニーク値を集約
+                all_rec_uniques = []
+                for v in rec_vars:
+                    all_rec_uniques.extend(df[v].dropna().unique().tolist())
+                unique_rec_vals = sorted(list(set(all_rec_uniques)), key=lambda x: str(x))
+                
+                st.write("各値の置き換えルールを設定してください:")
+                mapping_dict = {}
+                # 2列グリッドで配置
+                col_a, col_b = st.columns(2)
+                for i, val in enumerate(unique_rec_vals):
+                    with col_a if i % 2 == 0 else col_b:
+                        new_val_str = st.text_input(f"旧値 `{val}` の新値:", value=str(val), key=f"rec_val_{i}_{str(val)}")
+                        try:
+                            if "." in new_val_str:
+                                val_conv = float(new_val_str)
+                            else:
+                                val_conv = int(new_val_str)
+                        except ValueError:
+                            val_conv = new_val_str
+                        mapping_dict[val] = val_conv
+                        
+                if st.button("🔄 リコードを実行して新変数を作成", key="btn_apply_rec"):
+                    new_df, created_names = stats_engine.recode_values(df, rec_vars, mapping_dict, suffix=rec_suffix)
+                    st.session_state["df"] = new_df
+                    st.toast(f"{len(created_names)} 個の新変数を作成しました！ ({', '.join(created_names)})", icon="✨")
                     st.rerun()
 
-        # --- ② 値のリコード ---
-        elif "② 値のリコード" in proc_tool:
-            st.markdown("**変数の特定の値を別の値（文字列・数値）に置き換えて新しい変数を作成します。**")
-            rec_var = st.selectbox("リコード元の変数:", df.columns, key="rec_var")
-            new_var_name = st.text_input("作成する新変数名:", value=f"{rec_var}_recoded", key="rec_new_name")
-            
-            unique_rec_vals = df[rec_var].dropna().unique().tolist()
-            st.write("各値の置き換えルールを設定してください:")
-            
-            mapping_dict = {}
-            col_a, col_b = st.columns(2)
-            for i, val in enumerate(unique_rec_vals):
-                with col_a:
-                    st.write(f"旧値: `{val}`")
-                with col_b:
-                    new_val_str = st.text_input(f"`{val}` の新値:", value=str(val), key=f"rec_val_{i}")
-                    try:
-                        if "." in new_val_str:
-                            val_conv = float(new_val_str)
-                        else:
-                            val_conv = int(new_val_str)
-                    except ValueError:
-                        val_conv = new_val_str
-                    mapping_dict[val] = val_conv
-                    
-            if st.button("🔄 リコードを実行して新変数を作成", key="btn_apply_rec"):
-                new_df, created_name = stats_engine.recode_values(df, rec_var, mapping_dict, new_var_name)
-                st.session_state["df"] = new_df
-                st.toast(f"新変数 『{created_name}』 を作成しました！", icon="✨")
-                st.rerun()
-
-        # --- ③ 数値変数のカテゴリ化 (ビン分割) ---
+        # --- ③ 数値変数のカテゴリ化 (複数変数対応 & 動的変数名) ---
         elif "③ 数値変数のカテゴリ化" in proc_tool:
-            st.markdown("**連続数値変数（例: 年齢）を区切り値でカテゴリ変数（例: 年齢層）に変換します。**")
-            num_cols_only = df.select_dtypes(include=[np.number]).columns.tolist()
-            if num_cols_only:
-                bin_var = st.selectbox("カテゴリ化する数値変数:", num_cols_only, key="bin_var")
-                bin_new_name = st.text_input("作成する新変数名:", value=f"{bin_var}_層", key="bin_new_name")
-                
+            st.markdown("**連続数値変数（例: 年齢、得点）を区切り値でカテゴリ変数（例: 年齢層、得点区分）に変換します。**")
+            bin_vars = st.multiselect("カテゴリ化する数値変数 (複数選択可):", valid_num_cols, default=[valid_num_cols[0]] if valid_num_cols else [], key="bin_vars")
+            
+            c_b1, c_b2 = st.columns(2)
+            with c_b1:
+                bin_suffix = st.text_input("新変数の末尾 (接尾辞):", value="_層", key="bin_suffix")
+            with c_b2:
+                if bin_vars:
+                    b_preview = [f"`{v}{bin_suffix}`" for v in bin_vars]
+                    st.caption(f"✨ 作成される新変数名:\n{', '.join(b_preview)}")
+
+            c_b3, c_b4 = st.columns(2)
+            with c_b3:
                 cuts_input = st.text_input("区切り値をカンマ区切りで入力 (例: 0, 30, 50, 100):", value="0, 30, 50, 100", key="bin_cuts")
-                labels_input = st.text_input("ラベルをカンマ区切りで入力 (例: 若年, 中年, 高齢):", value="若年, 中年, 高齢", key="bin_labels")
+            with c_b4:
+                labels_input = st.text_input("ラベルをカンマ区切りで入力 (例: 低, 中, 高):", value="低, 中, 高", key="bin_labels")
                 
-                if st.button("📊 カテゴリ化（ビン分割）を実行", key="btn_apply_bin"):
+            if st.button("📊 カテゴリ化（ビン分割）を実行", key="btn_apply_bin"):
+                if bin_vars:
                     try:
                         cuts = [float(x.strip()) for x in cuts_input.split(",")]
                         labels = [x.strip() for x in labels_input.split(",")]
-                        new_df, created_name = stats_engine.create_binned_variable(df, bin_var, cuts, labels, bin_new_name)
+                        new_df, created_names = stats_engine.create_binned_variable(df, bin_vars, cuts, labels, suffix=bin_suffix)
                         st.session_state["df"] = new_df
-                        st.toast(f"新変数 『{created_name}』 を作成しました！", icon="✨")
+                        st.toast(f"{len(created_names)} 個の新変数を作成しました！ ({', '.join(created_names)})", icon="✨")
                         st.rerun()
                     except Exception as e:
                         st.error(f"エラー: {e}")
+                else:
+                    st.warning("1つ以上の数値変数を選択してください。")
 
-        # --- ④ 合成スコア ---
+        # --- ④ 合成スコア作成 ---
         elif "④ 合成スコア作成" in proc_tool:
             st.markdown("**複数の数値変数から「平均値」または「合計値」の新変数（尺度得点など）を作成します。**")
-            num_cols_only = df.select_dtypes(include=[np.number]).columns.tolist()
-            valid_nums_for_comp = [c for c in num_cols_only if not is_id_like_column(c, df[c])]
-            if not valid_nums_for_comp:
-                valid_nums_for_comp = num_cols_only
-                
-            if num_cols_only:
-                source_vars = st.multiselect("合成する変数を選択 (複数):", num_cols_only, default=valid_nums_for_comp[:min(3, len(valid_nums_for_comp))], key="comp_vars")
+            source_vars = st.multiselect("合成する変数を選択 (複数選択):", valid_num_cols, default=valid_num_cols[:min(3, len(valid_num_cols))], key="comp_vars")
+            
+            c_c1, c_c2 = st.columns(2)
+            with c_c1:
                 comp_method = st.radio("計算方法:", ["平均値 (Mean)", "合計値 (Sum)"], horizontal=True, key="comp_method")
-                comp_new_name = st.text_input("作成する新変数名:", value="合成スコア", key="comp_new_name")
+            with c_c2:
+                default_name = "合成スコア_平均" if "平均値" in comp_method else "合成スコア_合計"
+                comp_new_name = st.text_input("作成する新変数名:", value=default_name, key="comp_new_name")
+                if source_vars:
+                    st.caption(f"✨ 投入変数: {len(source_vars)} 項目 ({', '.join(source_vars)})")
                 
-                if st.button("➕ 合成スコアを作成", key="btn_apply_comp"):
-                    if len(source_vars) >= 2:
-                        func_type = "mean" if "平均値" in comp_method else "sum"
-                        new_df, created_name = stats_engine.create_composite_score(df, source_vars, func=func_type, new_var_name=comp_new_name)
-                        st.session_state["df"] = new_df
-                        st.toast(f"新変数 『{created_name}』 を作成しました！", icon="✨")
-                        st.rerun()
-                    else:
-                        st.warning("合成には2つ以上の変数を選択してください。")
+            if st.button("➕ 合成スコアを作成", key="btn_apply_comp"):
+                if len(source_vars) >= 2:
+                    func_type = "mean" if "平均値" in comp_method else "sum"
+                    new_df, created_name = stats_engine.create_composite_score(df, source_vars, func=func_type, new_var_name=comp_new_name)
+                    st.session_state["df"] = new_df
+                    st.toast(f"新変数 『{created_name}』 を作成しました！", icon="✨")
+                    st.rerun()
+                else:
+                    st.warning("合成には2つ以上の変数を選択してください。")
 
         # --- ⑤ 逆転項目の反転 ---
         elif "⑤ 逆転項目の反転" in proc_tool:
             st.markdown("**アンケートの逆転項目（例: 1~5件法で 1↔5, 2↔4 に反転）を一括処理します。**")
-            num_cols_only = df.select_dtypes(include=[np.number]).columns.tolist()
-            if num_cols_only:
-                c_r1, c_r2, c_r3 = st.columns(3)
-                with c_r1:
-                    rev_vars = st.multiselect("反転する変数を選択:", num_cols_only, key="rev_vars")
-                with c_r2:
-                    min_val = st.number_input("尺度の最小値 (例: 1):", value=1.0, key="rev_min")
-                with c_r3:
-                    max_val = st.number_input("尺度の最大値 (例: 5や7):", value=5.0, key="rev_max")
+            rev_vars = st.multiselect("反転する変数を選択 (複数選択可):", valid_num_cols, default=[], key="rev_vars")
+            
+            c_r1, c_r2, c_r3 = st.columns(3)
+            with c_r1:
+                min_val = st.number_input("尺度の最小値 (例: 1):", value=1.0, key="rev_min")
+            with c_r2:
+                max_val = st.number_input("尺度の最大値 (例: 5や7):", value=5.0, key="rev_max")
+            with c_r3:
+                rev_suffix = st.text_input("新変数の末尾 (接尾辞):", value="_rev", key="rev_suffix")
                 
-                rev_suffix = st.text_input("新変数の末尾プレフィックス (例: _rev):", value="_rev", key="rev_suffix")
-                st.caption(f"計算式: 新値 = ({min_val} + {max_val}) - 元の値 = {min_val + max_val} - 元の値")
-                
-                if st.button("🔄 逆転項目の反転を実行", key="btn_apply_rev"):
-                    if rev_vars:
-                        new_df, created_names = stats_engine.reverse_code_values(df, rev_vars, min_val, max_val, rev_suffix)
-                        st.session_state["df"] = new_df
-                        st.toast(f"{len(created_names)} 個の反転変数を作成しました！ ({', '.join(created_names)})", icon="✨")
-                        st.rerun()
-                    else:
-                        st.warning("1つ以上の変数を選択してください。")
+            if rev_vars:
+                r_preview = [f"`{v}{rev_suffix}`" for v in rev_vars]
+                st.caption(f"✨ 作成される新変数名: {', '.join(r_preview)} | 計算式: 新値 = ({min_val} + {max_val}) - 旧値")
+            
+            if st.button("🔄 逆転項目の反転を実行", key="btn_apply_rev"):
+                if rev_vars:
+                    new_df, created_names = stats_engine.reverse_code_values(df, rev_vars, min_val, max_val, rev_suffix)
+                    st.session_state["df"] = new_df
+                    st.toast(f"{len(created_names)} 個の反転変数を作成しました！ ({', '.join(created_names)})", icon="✨")
+                    st.rerun()
+                else:
+                    st.warning("1つ以上の変数を選択してください。")
 
         # --- ⑥ 標準化 / 正規化 ---
         elif "⑥ 標準化 / 正規化" in proc_tool:
             st.markdown("**数値変数を「標準化（Zスコア: 平均0, 分散1）」または「正規化（0〜1スケーリング）」します。**")
-            num_cols_only = df.select_dtypes(include=[np.number]).columns.tolist()
-            if num_cols_only:
-                c_s1, c_s2 = st.columns(2)
-                with c_s1:
-                    std_vars = st.multiselect("変換する数値変数を選択:", num_cols_only, key="std_vars")
-                with c_s2:
-                    std_method = st.radio("変換方法:", ["標準化 (Zスコア化)", "正規化 (0-1 Min-Max)"], key="std_method")
-                
+            std_vars = st.multiselect("変換する数値変数を選択 (複数選択可):", valid_num_cols, default=valid_num_cols[:min(3, len(valid_num_cols))], key="std_vars")
+            
+            c_s1, c_s2 = st.columns(2)
+            with c_s1:
+                std_method = st.radio("変換方法:", ["標準化 (Zスコア化: 平均0, SD 1)", "正規化 (0-1 Min-Maxスケーリング)"], key="std_method")
+            with c_s2:
                 method_type = "standardize" if "標準化" in std_method else "normalize"
                 default_suffix = "_z" if method_type == "standardize" else "_norm"
-                std_suffix = st.text_input("新変数の末尾 (suffix):", value=default_suffix, key="std_suffix")
+                std_suffix = st.text_input("新変数の末尾 (接尾辞):", value=default_suffix, key="std_suffix")
                 
-                if st.button("📐 標準化 / 正規化を実行", key="btn_apply_std"):
-                    if std_vars:
-                        new_df, created_names = stats_engine.standardize_normalize_variables(df, std_vars, method=method_type, suffix=std_suffix)
-                        st.session_state["df"] = new_df
-                        st.toast(f"{len(created_names)} 個の変換変数を作成しました！ ({', '.join(created_names)})", icon="✨")
-                        st.rerun()
-                    else:
-                        st.warning("1つ以上の変数を選択してください。")
+            if std_vars:
+                s_preview = [f"`{v}{std_suffix}`" for v in std_vars]
+                st.caption(f"✨ 作成される新変数名: {', '.join(s_preview)}")
+                
+            if st.button("📐 標準化 / 正規化を実行", key="btn_apply_std"):
+                if std_vars:
+                    new_df, created_names = stats_engine.standardize_normalize_variables(df, std_vars, method=method_type, suffix=std_suffix)
+                    st.session_state["df"] = new_df
+                    st.toast(f"{len(created_names)} 個の変換変数を作成しました！ ({', '.join(created_names)})", icon="✨")
+                    st.rerun()
+                else:
+                    st.warning("1つ以上の変数を選択してください。")
 
         # --- ⑦ 欠損値処理 ---
         elif "⑦ 欠損値の処理" in proc_tool:
@@ -432,7 +483,7 @@ def main():
                     key="na_strategy"
                 )
             with c_m2:
-                na_target_vars = st.multiselect("対象とする変数 (未指定の場合は全変数):", df.columns, key="na_vars")
+                na_target_vars = st.multiselect("対象とする変数 (未指定の場合は全変数):", valid_all_cols, key="na_vars")
                 
             fill_val = None
             if "指定の固定値" in na_strategy:
@@ -480,7 +531,7 @@ def main():
             for c_idx in range(st.session_state["num_conditions"]):
                 cf1, cf2, cf3 = st.columns([2, 1.5, 2.5])
                 with cf1:
-                    col_name = st.selectbox(f"条件{c_idx+1} 変数:", df.columns, key=f"f_col_{c_idx}")
+                    col_name = st.selectbox(f"条件{c_idx+1} 変数:", valid_all_cols, key=f"f_col_{c_idx}")
                 with cf2:
                     op = st.selectbox(f"条件{c_idx+1} 演算子:", ["==", "!=", ">", ">=", "<", "<=", "contains", "in"], key=f"f_op_{c_idx}")
                 with cf3:
@@ -497,25 +548,27 @@ def main():
                 else:
                     st.warning("比較値を入力してください。")
 
-        # --- ⑨ ダミー変数化 ---
+        # --- ⑨ ダミー変数化 (複数変数対応) ---
         elif "⑨ ダミー変数化" in proc_tool:
-            st.markdown("**カテゴリ変数（名義尺度）を 0 と 1 のダミー変数（One-Hot Encoding）に変換します。**")
-            num_cols_only = df.select_dtypes(include=[np.number]).columns.tolist()
-            cat_vars = [c for c in df.columns if c not in num_cols_only or df[c].nunique() <= 10]
-            if cat_vars:
-                c_d1, c_d2 = st.columns(2)
-                with c_d1:
-                    dummy_var = st.selectbox("ダミー変数化するカテゴリ変数:", cat_vars, key="dummy_var")
-                    dummy_prefix = st.text_input("プレフィックス (変数名の接頭辞):", value=dummy_var, key="dummy_prefix")
-                with c_d2:
-                    drop_first = st.checkbox("最初のカテゴリを変数から除外 (参照カテゴリ・多重共線性対策)", value=False, key="dummy_drop_first")
-                    st.caption("※ 回帰分析等で多重共線性（マルチコ）を防ぐ場合はチェックを推奨します。")
+            st.markdown("**カテゴリ変数（名義尺度）を 0 と 1 のダミー変数（One-Hot Encoding）に変換します（複数変数の一括変換に対応）。**")
+            dummy_vars = st.multiselect("ダミー変数化するカテゴリ変数 (複数選択可):", valid_cat_cols, default=[valid_cat_cols[0]] if valid_cat_cols else [], key="dummy_vars")
+            
+            c_d1, c_d2 = st.columns(2)
+            with c_d1:
+                drop_first = st.checkbox("各変数の最初のカテゴリを除外 (参照カテゴリ・多重共線性対策)", value=False, key="dummy_drop_first")
+                st.caption("※ 回帰分析等で多重共線性（マルチコ）を防ぐ場合はチェックを推奨します。")
+            with c_d2:
+                if dummy_vars:
+                    st.caption(f"✨ 変換対象: {len(dummy_vars)} 個のカテゴリ変数 ({', '.join(dummy_vars)})")
                     
-                if st.button("🏷️ ダミー変数を作成", key="btn_apply_dummy"):
-                    new_df, created_cols = stats_engine.create_dummy_variables(df, dummy_var, drop_first=drop_first, prefix=dummy_prefix)
+            if st.button("🏷️ ダミー変数を作成", key="btn_apply_dummy"):
+                if dummy_vars:
+                    new_df, created_cols = stats_engine.create_dummy_variables(df, dummy_vars, drop_first=drop_first)
                     st.session_state["df"] = new_df
                     st.toast(f"{len(created_cols)} 個のダミー変数を作成しました！ ({', '.join(created_cols)})", icon="✨")
                     st.rerun()
+                else:
+                    st.warning("1つ以上のカテゴリ変数を選択してください。")
 
         st.divider()
         if st.button("↩️ データをアップロード直後の初期状態に戻す"):
@@ -532,18 +585,6 @@ def main():
         with col2:
             st.write("**データ型一覧:**")
             st.dataframe(pd.DataFrame(df.dtypes, columns=["データ型"]), use_container_width=True)
-
-    # 変数列の分類 & ID様変数の自動判定・除外
-    all_columns = df.columns.tolist()
-    numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
-
-    # 分析デフォルト選択用の「ID様変数を除外した変数リスト」
-    valid_all_cols = [c for c in all_columns if not is_id_like_column(c, df[c])]
-    valid_num_cols = [c for c in numeric_columns if not is_id_like_column(c, df[c])]
-    if not valid_all_cols:
-        valid_all_cols = all_columns
-    if not valid_num_cols:
-        valid_num_cols = numeric_columns
 
     # ------------------------------------------------------------------
     # メイン分析セクション (4大カテゴリー階層ナビゲーション)

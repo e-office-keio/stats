@@ -26,6 +26,8 @@ try:
 except Exception as e:
     JAPANIZE_ERROR = f"{type(e).__name__}: {str(e)}"
 
+CURRENT_FONT = "IPAexGothic" if HAS_JAPANIZE else "sans-serif"
+
 def setup_japanese_font():
     """環境に合わせた日本語フォントの設定"""
     if HAS_JAPANIZE:
@@ -38,7 +40,7 @@ def setup_japanese_font():
         plt.rcParams['axes.unicode_minus'] = False
         return
 
-    # japanize_matplotlib がない場合のOS別フォールバック (実際にシステムに存在するフォントのみ設定)
+    # japanize_matplotlib がない場合のOS別フォールバック
     system_fonts = [f.name for f in fm.fontManager.ttflist]
     candidates = [
         'IPAexGothic', 'IPAGothic', 'TakaoPGothic',
@@ -55,18 +57,51 @@ def setup_japanese_font():
     plt.rcParams['font.sans-serif'] = [matched_font, 'DejaVu Sans', 'sans-serif']
     plt.rcParams['axes.unicode_minus'] = False
 
-setup_japanese_font()
+def get_available_japanese_fonts():
+    """システムで利用可能な日本語対応フォントの一覧を取得"""
+    system_font_names = set(f.name for f in fm.fontManager.ttflist)
+    
+    candidates = [
+        ("IPAexゴシック (推奨: 文字化け完全防止)", "IPAexGothic"),
+        ("IPAゴシック", "IPAGothic"),
+        ("TakaoPゴシック", "TakaoPGothic"),
+        ("ヒラギノ角ゴシック (Mac)", "Hiragino Sans"),
+        ("ヒラギノ角ゴ ProN (Mac)", "Hiragino Kaku Gothic ProN"),
+        ("游ゴシック (Yu Gothic)", "Yu Gothic"),
+        ("メイリオ (Meiryo)", "Meiryo"),
+        ("Noto Sans CJK JP", "Noto Sans CJK JP"),
+        ("MS ゴシック (MS Gothic)", "MS Gothic"),
+        ("標準フォント (sans-serif)", "sans-serif"),
+    ]
+    
+    available = []
+    if HAS_JAPANIZE:
+        available.append(("IPAexゴシック (推奨: 文字化け完全防止)", "IPAexGothic"))
+        
+    for label, fname in candidates:
+        if fname in system_font_names and (label, fname) not in available:
+            available.append((label, fname))
+            
+    if not available:
+        available.append(("標準フォント (sans-serif)", "sans-serif"))
+        
+    return available
+
+def set_current_font(font_name):
+    """グラフ描画フォントを設定"""
+    global CURRENT_FONT
+    CURRENT_FONT = font_name
+    set_apa_plot_style()
 
 def set_apa_plot_style():
     """APA形式のグラフスタイルを設定"""
+    global CURRENT_FONT
     setup_japanese_font()
-    font_name = 'IPAexGothic' if HAS_JAPANIZE else plt.rcParams.get('font.family', ['sans-serif'])
-    if isinstance(font_name, list):
-        font_name = font_name[0]
-        
+    font_name = CURRENT_FONT if CURRENT_FONT else ('IPAexGothic' if HAS_JAPANIZE else 'sans-serif')
+    
     plt.rcParams.update({
         'font.family': font_name,
-        'font.sans-serif': [font_name, 'DejaVu Sans', 'sans-serif'],
+        'font.sans-serif': [font_name, 'IPAexGothic', 'DejaVu Sans', 'sans-serif'],
         'font.size': 11,
         'axes.labelsize': 11,
         'axes.titlesize': 12,
@@ -80,9 +115,11 @@ def set_apa_plot_style():
         'axes.linewidth': 1.0,
         'grid.color': '#e0e0e0',
         'grid.linestyle': '--',
-        'grid.alpha': 0.5
+        'grid.alpha': 0.5,
+        'axes.unicode_minus': False
     })
-    setup_japanese_font()
+
+setup_japanese_font()
 
 def fig_to_bytes(fig):
     """Matplotlib Figureオブジェクトをbytesへ変換"""
@@ -197,32 +234,55 @@ def generate_sample_dataset(n=150, seed=None):
 
 
 # ----------------------------------------------------------------------
-# データ前処理・リコード・除外機能
 # ----------------------------------------------------------------------
-def filter_exclude_values(df, var_name, exclude_values):
-    """特定の値を指定して該当行を除外"""
+# データ前処理・リコード・除外機能 (複数変数一括処理対応)
+# ----------------------------------------------------------------------
+def filter_exclude_values(df, target_vars, exclude_values):
+    """特定の値を指定して該当行を除外（単一または複数変数）"""
     new_df = df.copy()
-    new_df = new_df[~new_df[var_name].isin(exclude_values)]
+    if isinstance(target_vars, str):
+        target_vars = [target_vars]
+    for var in target_vars:
+        if var in new_df.columns:
+            new_df = new_df[~new_df[var].isin(exclude_values)]
     return new_df
 
 
-def recode_values(df, target_var, mapping_dict, new_var_name=None):
-    """既存変数の値をマッピング辞書に従って置換し新変数を作成"""
-    if not new_var_name:
-        new_var_name = f"{target_var}_recoded"
+def recode_values(df, target_vars, mapping_dict, suffix="_recoded", new_var_name=None):
+    """既存変数の値をマッピング辞書に従って置換し新変数を作成（単一または複数変数）"""
     new_df = df.copy()
-    new_df[new_var_name] = new_df[target_var].replace(mapping_dict)
-    return new_df, new_var_name
+    if isinstance(target_vars, str):
+        target_vars = [target_vars]
+    
+    created_names = []
+    for var in target_vars:
+        if len(target_vars) == 1 and new_var_name:
+            out_name = new_var_name
+        else:
+            out_name = f"{var}{suffix}"
+        new_df[out_name] = new_df[var].replace(mapping_dict)
+        created_names.append(out_name)
+    return new_df, created_names
 
-def create_binned_variable(df, target_var, bins, labels, new_var_name=None):
-    """数値変数を任意のビンで区切ってカテゴリ化"""
-    if not new_var_name:
-        new_var_name = f"{target_var}_binned"
+
+def create_binned_variable(df, target_vars, bins, labels, suffix="_層", new_var_name=None):
+    """数値変数を任意のビンで区切ってカテゴリ化（単一または複数変数）"""
     new_df = df.copy()
-    new_df[new_var_name] = pd.cut(new_df[target_var], bins=bins, labels=labels, include_lowest=True)
-    return new_df, new_var_name
+    if isinstance(target_vars, str):
+        target_vars = [target_vars]
+    
+    created_names = []
+    for var in target_vars:
+        if len(target_vars) == 1 and new_var_name:
+            out_name = new_var_name
+        else:
+            out_name = f"{var}{suffix}"
+        new_df[out_name] = pd.cut(new_df[var], bins=bins, labels=labels, include_lowest=True)
+        created_names.append(out_name)
+    return new_df, created_names
 
-def create_composite_score(df, source_vars, func="mean", new_var_name="Composite_Score"):
+
+def create_composite_score(df, source_vars, func="mean", new_var_name="合成スコア"):
     """複数変数の合成スコア（平均値または合計値）を作成"""
     new_df = df.copy()
     if func == "mean":
@@ -231,9 +291,12 @@ def create_composite_score(df, source_vars, func="mean", new_var_name="Composite
         new_df[new_var_name] = new_df[source_vars].sum(axis=1)
     return new_df, new_var_name
 
+
 def reverse_code_values(df, target_vars, min_val, max_val, suffix="_rev"):
     """逆転項目の反転リコード (新値 = (min_val + max_val) - 旧値)"""
     new_df = df.copy()
+    if isinstance(target_vars, str):
+        target_vars = [target_vars]
     created_names = []
     for var in target_vars:
         new_name = f"{var}{suffix}"
@@ -241,9 +304,12 @@ def reverse_code_values(df, target_vars, min_val, max_val, suffix="_rev"):
         created_names.append(new_name)
     return new_df, created_names
 
+
 def standardize_normalize_variables(df, target_vars, method="standardize", suffix=None):
     """変数の標準化 (Zスコア) または 正規化 (0-1 Min-Max)"""
     new_df = df.copy()
+    if isinstance(target_vars, str):
+        target_vars = [target_vars]
     created_names = []
     if suffix is None:
         suffix = "_z" if method == "standardize" else "_norm"
@@ -261,6 +327,7 @@ def standardize_normalize_variables(df, target_vars, method="standardize", suffi
             new_df[new_name] = (s - min_val) / (max_val - min_val) if max_val != min_val else 0.0
         created_names.append(new_name)
     return new_df, created_names
+
 
 def handle_missing_values(df, strategy="listwise", target_vars=None, fill_val=None):
     """欠損値の処理（リストワイズ削除、平均値・中央値・最頻値・定数補完）"""
@@ -288,6 +355,7 @@ def handle_missing_values(df, strategy="listwise", target_vars=None, fill_val=No
             new_df[var] = new_df[var].fillna(fill_val)
             
     return new_df
+
 
 def filter_advanced(df, conditions, logic="AND"):
     """
@@ -342,15 +410,20 @@ def filter_advanced(df, conditions, logic="AND"):
             
     return df[final_mask].copy()
 
-def create_dummy_variables(df, target_var, drop_first=False, prefix=None):
-    """カテゴリ変数のダミー変数化 (One-Hot Encoding)"""
+
+def create_dummy_variables(df, target_vars, drop_first=False, prefix_sep="_"):
+    """カテゴリ変数のダミー変数化 (One-Hot Encoding, 単一または複数変数)"""
     new_df = df.copy()
-    if prefix is None:
-        prefix = target_var
-    dummies = pd.get_dummies(new_df[target_var], prefix=prefix, drop_first=drop_first, dtype=int)
-    dummy_cols = list(dummies.columns)
-    new_df = pd.concat([new_df, dummies], axis=1)
-    return new_df, dummy_cols
+    if isinstance(target_vars, str):
+        target_vars = [target_vars]
+        
+    all_dummy_cols = []
+    for var in target_vars:
+        dummies = pd.get_dummies(new_df[var], prefix=var, prefix_sep=prefix_sep, drop_first=drop_first, dtype=int)
+        dummy_cols = list(dummies.columns)
+        all_dummy_cols.extend(dummy_cols)
+        new_df = pd.concat([new_df, dummies], axis=1)
+    return new_df, all_dummy_cols
 
 
 
