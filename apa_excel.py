@@ -494,11 +494,17 @@ def build_full_excel_report(analysis_results):
             except Exception:
                 has_native_chart = False
                 
-        # 補助テーブル (extra_df) の出力 (二元配置ANOVAなど)
+        # 補助テーブル (extra_df / extra_df_2) の出力 (二元配置ANOVA、SEM等)
         if extra_df is not None and not extra_df.empty:
             extra_start_row = next_row + 2
-            format_apa_table(ws, start_row=extra_start_row, title=extra_title, df=extra_df, note=None, table_num=table_counter)
+            _, next_extra_row = format_apa_table(ws, start_row=extra_start_row, title=extra_title, df=extra_df, note=None, table_num=table_counter)
             table_counter += 1
+            
+            extra_df_2 = item.get("extra_df_2", None)
+            extra_title_2 = item.get("extra_title_2", "補助分析表2")
+            if extra_df_2 is not None and not extra_df_2.empty:
+                format_apa_table(ws, start_row=next_extra_row + 2, title=extra_title_2, df=extra_df_2, note=None, table_num=table_counter)
+                table_counter += 1
 
         # ネイティブグラフが作成できなかった場合、または相関等の場合は画像を配置
         if fig_bytes is not None and not has_native_chart:

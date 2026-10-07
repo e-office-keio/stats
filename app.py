@@ -24,6 +24,12 @@ if "analysis_queue" not in st.session_state:
     st.session_state["analysis_queue"] = []
 if "results" not in st.session_state:
     st.session_state["results"] = {}
+if "sem_latents" not in st.session_state:
+    st.session_state["sem_latents"] = []
+if "sem_paths" not in st.session_state:
+    st.session_state["sem_paths"] = []
+if "sem_covs" not in st.session_state:
+    st.session_state["sem_covs"] = []
 
 # カスタムCSS
 st.markdown("""
@@ -59,18 +65,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def is_id_like_column(col_name, series=None):
-    """ID列・被験者番号・インデックス列などを判定してデフォルト選択から除外"""
-    col_str = str(col_name).lower().strip()
-    id_keywords = ["id", "被験者", "参加者", "番号", "no.", "no", "連番", "コード", "index", "氏名", "名前"]
-    for kw in id_keywords:
-        if kw in col_str:
-            return True
-    if series is not None and len(series.dropna()) > 0:
-        # ユニーク数がサンプル数と等しく、かつ数値の昇順などの場合
-        if series.nunique() == len(series.dropna()) and pd.api.types.is_integer_dtype(series):
-            return True
-    return False
+
 
 
 def load_data_file(uploaded_file, encoding_choice="自動判定 (Auto)", sheet_name=0):
@@ -128,6 +123,20 @@ def main():
                         selected_sheet = sheet_names[0]
                 except Exception:
                     selected_sheet = 0
+                    
+        if "df" in st.session_state and st.session_state["df"] is not None:
+            curr_df = st.session_state["df"]
+            with st.expander("💾 加工済みデータの保存", expanded=False):
+                st.caption(f"現在のデータ: {curr_df.shape[0]}行 × {curr_df.shape[1]}列")
+                c_s_dl1, c_s_dl2 = st.columns(2)
+                with c_s_dl1:
+                    s_csv = curr_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                    st.download_button("CSV (.csv)", data=s_csv, file_name="加工済みデータ.csv", mime="text/csv", key="sb_dl_csv", use_container_width=True)
+                with c_s_dl2:
+                    s_io = io.BytesIO()
+                    with pd.ExcelWriter(s_io, engine="openpyxl") as writer:
+                        curr_df.to_excel(writer, index=False, sheet_name="加工済みデータ")
+                    st.download_button("Excel (.xlsx)", data=s_io.getvalue(), file_name="加工済みデータ.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="sb_dl_xlsx", use_container_width=True)
         
         st.divider()
         st.header("📋 出力レポート管理")
@@ -222,20 +231,9 @@ def main():
 
     st.caption(f"現在の分析対象データ: {df.shape[0]}行 × {df.shape[1]}列")
 
-    # 変数列の分類 & ID様変数の事前判定・除外 (前処理・分析共通)
+    # 変数列の分類 (前処理・分析共通)
     all_columns = df.columns.tolist()
     numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
-
-    # デフォルト選択用の「ID様変数を除外した変数リスト」
-    valid_all_cols = [c for c in all_columns if not is_id_like_column(c, df[c])]
-    valid_num_cols = [c for c in numeric_columns if not is_id_like_column(c, df[c])]
-    if not valid_all_cols:
-        valid_all_cols = all_columns
-    if not valid_num_cols:
-        valid_num_cols = numeric_columns
-    valid_cat_cols = [c for c in valid_all_cols if c not in numeric_columns or df[c].nunique() <= 10]
-    if not valid_cat_cols:
-        valid_cat_cols = valid_all_cols
 
     # ------------------------------------------------------------------
     # データ前処理・リコード・フィルタリング セクション
@@ -292,7 +290,7 @@ def main():
             st.markdown("**指定した複数変数から、無効値（例: -99, 99, '無回答' など）を含む行を一括で除外します。**")
             col_ex1, col_ex2 = st.columns(2)
             with col_ex1:
-                target_ex_vars = st.multiselect("対象の変数を選択 (複数選択可):", valid_all_cols, default=[valid_all_cols[0]] if valid_all_cols else [], key="ex_vars")
+                target_ex_vars = st.multiselect("対象の変数を選択 (複数選択可):", all_columns, default=[], key="ex_vars")
             with col_ex2:
                 if target_ex_vars:
                     # 選択された全変数のユニーク値を集約
@@ -302,7 +300,7 @@ def main():
                     unique_vals = sorted(list(set(all_uniques)), key=lambda x: str(x))
                 else:
                     unique_vals = []
-                vals_to_exclude = st.multiselect("除外したい値を選択 (該当する行が削除されます):", unique_vals, key="ex_vals")
+                vals_to_exclude = st.multiselect("除外したい値を選択 (該当する行が削除されます):", unique_vals, default=[], key="ex_vals")
                 
             if st.button("🚫 指定した値の行を除外してデータを更新", key="btn_apply_ex"):
                 if target_ex_vars and vals_to_exclude:
@@ -316,7 +314,7 @@ def main():
         # --- ② 値のリコード (複数変数対応 & 動的変数名) ---
         elif "② 値のリコード" in proc_tool:
             st.markdown("**変数の特定の値を別の値に置き換えて新しい変数を作成します（複数変数への一括適用に対応）。**")
-            rec_vars = st.multiselect("リコード元の変数を選択 (複数選択可):", valid_all_cols, default=[valid_all_cols[0]] if valid_all_cols else [], key="rec_vars")
+            rec_vars = st.multiselect("リコード元の変数を選択 (複数選択可):", all_columns, default=[], key="rec_vars")
             
             c_r_opt1, c_r_opt2 = st.columns(2)
             with c_r_opt1:
@@ -360,7 +358,7 @@ def main():
         # --- ③ 数値変数のカテゴリ化 (複数変数対応 & 動的変数名) ---
         elif "③ 数値変数のカテゴリ化" in proc_tool:
             st.markdown("**連続数値変数（例: 年齢、得点）を区切り値でカテゴリ変数（例: 年齢層、得点区分）に変換します。**")
-            bin_vars = st.multiselect("カテゴリ化する数値変数 (複数選択可):", valid_num_cols, default=[valid_num_cols[0]] if valid_num_cols else [], key="bin_vars")
+            bin_vars = st.multiselect("カテゴリ化する数値変数 (複数選択可):", numeric_columns, default=[], key="bin_vars")
             
             c_b1, c_b2 = st.columns(2)
             with c_b1:
@@ -393,7 +391,7 @@ def main():
         # --- ④ 合成スコア作成 ---
         elif "④ 合成スコア作成" in proc_tool:
             st.markdown("**複数の数値変数から「平均値」または「合計値」の新変数（尺度得点など）を作成します。**")
-            source_vars = st.multiselect("合成する変数を選択 (複数選択):", valid_num_cols, default=valid_num_cols[:min(3, len(valid_num_cols))], key="comp_vars")
+            source_vars = st.multiselect("合成する変数を選択 (複数選択):", numeric_columns, default=[], key="comp_vars")
             
             c_c1, c_c2 = st.columns(2)
             with c_c1:
@@ -417,7 +415,7 @@ def main():
         # --- ⑤ 逆転項目の反転 ---
         elif "⑤ 逆転項目の反転" in proc_tool:
             st.markdown("**アンケートの逆転項目（例: 1~5件法で 1↔5, 2↔4 に反転）を一括処理します。**")
-            rev_vars = st.multiselect("反転する変数を選択 (複数選択可):", valid_num_cols, default=[], key="rev_vars")
+            rev_vars = st.multiselect("反転する変数を選択 (複数選択可):", numeric_columns, default=[], key="rev_vars")
             
             c_r1, c_r2, c_r3 = st.columns(3)
             with c_r1:
@@ -443,7 +441,7 @@ def main():
         # --- ⑥ 標準化 / 正規化 ---
         elif "⑥ 標準化 / 正規化" in proc_tool:
             st.markdown("**数値変数を「標準化（Zスコア: 平均0, 分散1）」または「正規化（0〜1スケーリング）」します。**")
-            std_vars = st.multiselect("変換する数値変数を選択 (複数選択可):", valid_num_cols, default=valid_num_cols[:min(3, len(valid_num_cols))], key="std_vars")
+            std_vars = st.multiselect("変換する数値変数を選択 (複数選択可):", numeric_columns, default=[], key="std_vars")
             
             c_s1, c_s2 = st.columns(2)
             with c_s1:
@@ -483,7 +481,7 @@ def main():
                     key="na_strategy"
                 )
             with c_m2:
-                na_target_vars = st.multiselect("対象とする変数 (未指定の場合は全変数):", valid_all_cols, key="na_vars")
+                na_target_vars = st.multiselect("対象とする変数 (未指定の場合は全変数):", all_columns, default=[], key="na_vars")
                 
             fill_val = None
             if "指定の固定値" in na_strategy:
@@ -531,12 +529,12 @@ def main():
             for c_idx in range(st.session_state["num_conditions"]):
                 cf1, cf2, cf3 = st.columns([2, 1.5, 2.5])
                 with cf1:
-                    col_name = st.selectbox(f"条件{c_idx+1} 変数:", valid_all_cols, key=f"f_col_{c_idx}")
+                    col_name = st.selectbox(f"条件{c_idx+1} 変数:", all_columns, index=None, placeholder="変数を選択...", key=f"f_col_{c_idx}")
                 with cf2:
                     op = st.selectbox(f"条件{c_idx+1} 演算子:", ["==", "!=", ">", ">=", "<", "<=", "contains", "in"], key=f"f_op_{c_idx}")
                 with cf3:
                     val_str = st.text_input(f"条件{c_idx+1} 比較値 (カンマ区切り可):", value="", key=f"f_val_{c_idx}")
-                if val_str:
+                if val_str and col_name:
                     conditions.append((col_name, op, val_str))
                     
             if st.button("🔍 フィルタを実行してデータを抽出", key="btn_apply_filter"):
@@ -546,12 +544,12 @@ def main():
                     st.toast(f"フィルタを適用しました ({len(df)}行 → {len(new_df)}行)", icon="🎯")
                     st.rerun()
                 else:
-                    st.warning("比較値を入力してください。")
+                    st.warning("変数と比較値を入力してください。")
 
         # --- ⑨ ダミー変数化 (複数変数対応) ---
         elif "⑨ ダミー変数化" in proc_tool:
             st.markdown("**カテゴリ変数（名義尺度）を 0 と 1 のダミー変数（One-Hot Encoding）に変換します（複数変数の一括変換に対応）。**")
-            dummy_vars = st.multiselect("ダミー変数化するカテゴリ変数 (複数選択可):", valid_cat_cols, default=[valid_cat_cols[0]] if valid_cat_cols else [], key="dummy_vars")
+            dummy_vars = st.multiselect("ダミー変数化するカテゴリ変数 (複数選択可):", all_columns, default=[], key="dummy_vars")
             
             c_d1, c_d2 = st.columns(2)
             with c_d1:
@@ -569,22 +567,76 @@ def main():
                     st.rerun()
                 else:
                     st.warning("1つ以上のカテゴリ変数を選択してください。")
+            
+
 
         st.divider()
-        if st.button("↩️ データをアップロード直後の初期状態に戻す"):
-            st.session_state["df"] = st.session_state["raw_df"].copy()
-            st.toast("データを初期状態にリセットしました", icon="🔄")
-            st.rerun()
+        st.markdown("#### 💾 加工・変更済みデータの保存 / リセット")
+        c_dl_csv, c_dl_xlsx, c_rst = st.columns([1.2, 1.2, 1.5])
+        
+        with c_dl_csv:
+            csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            st.download_button(
+                label="📥 CSV形式で保存 (.csv)",
+                data=csv_bytes,
+                file_name="加工済みデータ.csv",
+                mime="text/csv",
+                use_container_width=True,
+                help="Excelでも文字化けしないUTF-8 (BOM付き) CSV形式で保存します。"
+            )
+        with c_dl_xlsx:
+            excel_io = io.BytesIO()
+            with pd.ExcelWriter(excel_io, engine="openpyxl") as writer:
+                df.to_excel(writer, index=False, sheet_name="加工済みデータ")
+            excel_bytes = excel_io.getvalue()
+            st.download_button(
+                label="📥 Excel形式で保存 (.xlsx)",
+                data=excel_bytes,
+                file_name="加工済みデータ.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                help="加工後の全データを含むExcelファイルとして保存します。"
+            )
+        with c_rst:
+            if st.button("↩️ データを初期状態に戻す", use_container_width=True):
+                st.session_state["df"] = st.session_state["raw_df"].copy()
+                st.toast("データを初期状態にリセットしました", icon="🔄")
+                st.rerun()
 
 
     # データプレビュー
-    with st.expander("🔍 現在のデータプレビュー & 変数一覧"):
+    with st.expander("🔍 現在のデータプレビュー & 変数一覧", expanded=False):
         col1, col2 = st.columns([3, 1])
         with col1:
             st.dataframe(df.head(10), use_container_width=True)
         with col2:
             st.write("**データ型一覧:**")
             st.dataframe(pd.DataFrame(df.dtypes, columns=["データ型"]), use_container_width=True)
+            
+        c_p_dl1, c_p_dl2 = st.columns(2)
+        with c_p_dl1:
+            csv_bytes_prev = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            st.download_button(
+                label="📥 現在のデータをCSVで保存 (.csv)",
+                data=csv_bytes_prev,
+                file_name="加工済みデータ.csv",
+                mime="text/csv",
+                key="dl_preview_csv",
+                use_container_width=True
+            )
+        with c_p_dl2:
+            excel_io_prev = io.BytesIO()
+            with pd.ExcelWriter(excel_io_prev, engine="openpyxl") as writer:
+                df.to_excel(writer, index=False, sheet_name="加工済みデータ")
+            excel_bytes_prev = excel_io_prev.getvalue()
+            st.download_button(
+                label="📥 現在のデータをExcelで保存 (.xlsx)",
+                data=excel_bytes_prev,
+                file_name="加工済みデータ.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_preview_xlsx",
+                use_container_width=True
+            )
 
     # ------------------------------------------------------------------
     # メイン分析セクション (4大カテゴリー階層ナビゲーション)
@@ -612,7 +664,7 @@ def main():
         # 1. 単純集計
         if "1. 単純集計" in stat_method_1:
             st.subheader("1. 単純集計 (Frequency Analysis)")
-            target_vars = st.multiselect("集計したいカテゴリ変数を選択 (複数選択可):", all_columns, default=[valid_all_cols[0]] if valid_all_cols else [], key="freq_vars")
+            target_vars = st.multiselect("集計したいカテゴリ変数を選択 (複数選択可):", all_columns, default=[], key="freq_vars")
             
             if st.button("🚀 単純集計を実行", key="run_freq", type="primary"):
                 if target_vars:
@@ -667,7 +719,7 @@ def main():
         # 2. 基本統計量
         elif "2. 基本統計量" in stat_method_1:
             st.subheader("2. 基本統計量 (Descriptive Statistics)")
-            selected_num_vars = st.multiselect("分析する数値変数を選択:", numeric_columns, default=valid_num_cols[:min(4, len(valid_num_cols))], key="desc_vars")
+            selected_num_vars = st.multiselect("分析する数値変数を選択:", numeric_columns, default=[], key="desc_vars")
             
             if st.button("🚀 基本統計量を計算", key="run_desc", type="primary"):
                 if selected_num_vars:
@@ -683,21 +735,15 @@ def main():
             if "desc" in st.session_state["results"]:
                 res = st.session_state["results"]["desc"]
                 
-                if st.button("➕ この結果をExcelレポートに追加", key="btn_add_desc"):
+                if st.button("➕ この結果をExcelレポートに追加 (表 & 分布図を同一シートに出力)", key="btn_add_desc"):
                     st.session_state["analysis_queue"].append({
                         "sheet_name": "基本統計量",
                         "title": "選択変数の基本統計量一覧表",
                         "df": res["res_df"],
-                        "note": res["note"]
+                        "note": res["note"],
+                        "fig_bytes": res["fig_bytes"]
                     })
-                    for var, hist_df in res.get("hist_dict", {}).items():
-                        st.session_state["analysis_queue"].append({
-                            "sheet_name": f"分布_{var}",
-                            "title": f"{var} の度数分布 (ヒストグラム)",
-                            "df": hist_df,
-                            "note": f"注. {var} の階級別度数分布。"
-                        })
-                    st.toast("『基本統計量 & ヒストグラム分布』をレポートリストに追加しました！", icon="📋")
+                    st.toast("『基本統計量 & 分布プロット』をレポートリストに追加しました！", icon="📋")
                     st.rerun()
 
                 c1, c2 = st.columns([2.5, 2])
@@ -715,10 +761,10 @@ def main():
             st.subheader("3. クロス集計 & カイ二乗検定 (Crosstab & Chi-Square)")
             c1, c2 = st.columns(2)
             with c1:
-                row_var = st.selectbox("行変数 (Row):", valid_all_cols if valid_all_cols else all_columns, key="ct_row")
+                row_var = st.selectbox("行変数 (Row):", all_columns, index=None, placeholder="行変数を選択...", key="ct_row")
             with c2:
                 col_options = [c for c in all_columns if c != row_var]
-                col_var = st.selectbox("列変数 (Column):", col_options, key="ct_col")
+                col_var = st.selectbox("列変数 (Column):", col_options, index=None, placeholder="列変数を選択...", key="ct_col")
                 
             if st.button("🚀 クロス集計を実行", key="run_ct", type="primary"):
                 if row_var and col_var:
@@ -729,6 +775,8 @@ def main():
                             "row_var": row_var, "col_var": col_var
                         }
                     st.toast("クロス集計が完了しました！", icon="✅")
+                else:
+                    st.warning("行変数と列変数をそれぞれ選択してください。")
                     
             if "ct" in st.session_state["results"]:
                 res = st.session_state["results"]["ct"]
@@ -776,9 +824,9 @@ def main():
             st.subheader("4. 独立2群の平均値の差の検定 (Independent Samples t-Test / Welch)")
             c1, c2, c3 = st.columns([1.5, 2, 1.5])
             with c1:
-                group_var = st.selectbox("グループ変数 (2カテゴリ):", valid_all_cols if valid_all_cols else all_columns, key="tt_group")
+                group_var = st.selectbox("グループ変数 (2カテゴリ):", all_columns, index=None, placeholder="グループ変数を選択...", key="tt_group")
             with c2:
-                num_vars = st.multiselect("比較する従属変数 (複数選択可):", numeric_columns, default=valid_num_cols[:min(3, len(valid_num_cols))], key="tt_nums")
+                num_vars = st.multiselect("比較する従属変数 (複数選択可):", numeric_columns, default=[], key="tt_nums")
             with c3:
                 equal_var_opt = st.selectbox("等分散性の仮定:", ["Welchのt検定 (推奨: 等分散非仮定)", "Studentのt検定 (等分散仮定)"], key="tt_eq_opt")
                 equal_var = True if "Student" in equal_var_opt else False
@@ -855,10 +903,10 @@ def main():
             st.caption("同一の被験者における前後比較（例: 事前テスト vs 事後テスト）や対応する2条件間の平均値の差を検定します。")
             c1, c2 = st.columns(2)
             with c1:
-                pair_var1 = st.selectbox("条件1 (例: 事前):", valid_num_cols if valid_num_cols else numeric_columns, key="pt_v1")
+                pair_var1 = st.selectbox("条件1 (例: 事前):", numeric_columns, index=None, placeholder="条件1の変数を選択...", key="pt_v1")
             with c2:
                 pair_options = [c for c in numeric_columns if c != pair_var1]
-                pair_var2 = st.selectbox("条件2 (例: 事後):", pair_options, key="pt_v2")
+                pair_var2 = st.selectbox("条件2 (例: 事後):", pair_options, index=None, placeholder="条件2の変数を選択...", key="pt_v2")
                 
             if st.button("🚀 対応のあるt検定を実行", key="run_pt", type="primary"):
                 if pair_var1 and pair_var2:
@@ -904,9 +952,9 @@ def main():
             st.subheader("6. 一元配置分散分析 & 多重比較 (One-Way ANOVA)")
             c1, c2 = st.columns([1.5, 2])
             with c1:
-                anova_group = st.selectbox("要因 (グループ変数):", valid_all_cols if valid_all_cols else all_columns, key="anova_grp")
+                anova_group = st.selectbox("要因 (グループ変数):", all_columns, index=None, placeholder="要因変数を選択...", key="anova_grp")
             with c2:
-                anova_nums = st.multiselect("従属変数 (複数選択可):", numeric_columns, default=valid_num_cols[:min(3, len(valid_num_cols))], key="anova_nums")
+                anova_nums = st.multiselect("従属変数 (複数選択可):", numeric_columns, default=[], key="anova_nums")
                 
             if st.button("🚀 分散分析(ANOVA)を実行", key="run_anova", type="primary"):
                 if anova_group and anova_nums:
@@ -998,12 +1046,12 @@ def main():
             st.caption("2つの要因（独立変数）による主効果および交互作用効果を検定します。")
             c1, c2, c3 = st.columns(3)
             with c1:
-                two_f1 = st.selectbox("要因1 (因子A):", valid_all_cols if valid_all_cols else all_columns, key="two_f1")
+                two_f1 = st.selectbox("要因1 (因子A):", all_columns, index=None, placeholder="要因1を選択...", key="two_f1")
             with c2:
                 two_f2_options = [c for c in all_columns if c != two_f1]
-                two_f2 = st.selectbox("要因2 (因子B):", two_f2_options, key="two_f2")
+                two_f2 = st.selectbox("要因2 (因子B):", two_f2_options, index=None, placeholder="要因2を選択...", key="two_f2")
             with c3:
-                two_dep = st.selectbox("従属変数 (目的変数):", valid_num_cols if valid_num_cols else numeric_columns, key="two_dep")
+                two_dep = st.selectbox("従属変数 (目的変数):", numeric_columns, index=None, placeholder="従属変数を選択...", key="two_dep")
                 
             if st.button("🚀 二元配置分散分析を実行", key="run_two_anova", type="primary"):
                 if two_f1 and two_f2 and two_dep:
@@ -1066,7 +1114,7 @@ def main():
             st.subheader("8. 相関分析 (Correlation Analysis)")
             c1, c2 = st.columns([2.5, 1])
             with c1:
-                corr_vars = st.multiselect("相関を計算する数値変数 (複数選択):", numeric_columns, default=valid_num_cols[:min(4, len(valid_num_cols))], key="corr_vars")
+                corr_vars = st.multiselect("相関を計算する数値変数 (複数選択):", numeric_columns, default=[], key="corr_vars")
             with c2:
                 corr_method = st.radio("相関係数の種類:", ["pearson", "spearman"], key="corr_method_opt")
                 
@@ -1112,11 +1160,10 @@ def main():
             st.subheader("9. 重回帰分析 (Multiple Linear Regression)")
             c1, c2 = st.columns([1, 2])
             with c1:
-                target_var = st.selectbox("目的変数 (Y):", valid_num_cols if valid_num_cols else numeric_columns, key="reg_target")
+                target_var = st.selectbox("目的変数 (Y):", numeric_columns, index=None, placeholder="目的変数を選択...", key="reg_target")
             with c2:
                 avail_features = [c for c in numeric_columns if c != target_var]
-                default_features = [c for c in valid_num_cols if c != target_var][:min(3, len(avail_features))]
-                feature_vars = st.multiselect("説明変数 (X):", avail_features, default=default_features, key="reg_features")
+                feature_vars = st.multiselect("説明変数 (X):", avail_features, default=[], key="reg_features")
                 
             if st.button("🚀 回帰分析を実行", key="run_reg", type="primary"):
                 if target_var and feature_vars:
@@ -1159,11 +1206,10 @@ def main():
             st.caption("二値カテゴリ変数（例: 購買あり/なし、合格/不合格、0/1）の生起確率を予測し、オッズ比を算出します。")
             c1, c2 = st.columns([1, 2])
             with c1:
-                logit_target = st.selectbox("目的変数 (二値カテゴリ):", valid_all_cols if valid_all_cols else all_columns, key="logit_target")
+                logit_target = st.selectbox("目的変数 (二値カテゴリ):", all_columns, index=None, placeholder="目的変数を選択...", key="logit_target")
             with c2:
                 logit_avail_features = [c for c in numeric_columns if c != logit_target]
-                logit_default_features = [c for c in valid_num_cols if c != logit_target][:min(3, len(logit_avail_features))]
-                logit_features = st.multiselect("説明変数 (連続またはダミー変数):", logit_avail_features, default=logit_default_features, key="logit_features")
+                logit_features = st.multiselect("説明変数 (連続またはダミー変数):", logit_avail_features, default=[], key="logit_features")
                 
             if st.button("🚀 ロジスティック回帰を実行", key="run_logit", type="primary"):
                 if logit_target and logit_features:
@@ -1210,7 +1256,7 @@ def main():
     with cat_tab4:
         stat_method_4 = st.radio(
             "分析手法を選択:",
-            ["11. 因子分析", "12. 信頼性分析 (α)"],
+            ["11. 因子分析", "12. 信頼性分析 (α)", "13. 共分散構造分析 / パス解析 (SEM)"],
             horizontal=True,
             key="method_cat4"
         )
@@ -1222,9 +1268,10 @@ def main():
             st.caption("負荷量の大きさで項目をソートし、共通性 (h²) の算出および主因子負荷量の太字表示に対応しています。")
             c1, c2, c3 = st.columns(3)
             with c1:
-                fa_vars = st.multiselect("因子分析に投入する観測変数:", numeric_columns, default=valid_num_cols[:min(6, len(valid_num_cols))], key="fa_vars")
+                fa_vars = st.multiselect("因子分析に投入する観測変数:", numeric_columns, default=[], key="fa_vars")
             with c2:
-                n_factors = st.number_input("抽出する因子数:", min_value=1, max_value=max(1, len(fa_vars)-1), value=min(2, max(1, len(fa_vars)-1)))
+                max_f_possible = max(1, len(fa_vars) - 1) if fa_vars else 5
+                n_factors = st.number_input("抽出する因子数:", min_value=1, max_value=max_f_possible, value=min(2, max_f_possible))
             with c3:
                 rotation = st.selectbox("因子回転法:", ["promax", "varimax"], key="fa_rot")
                 
@@ -1270,7 +1317,7 @@ def main():
         elif "12. 信頼性分析" in stat_method_4:
             st.subheader("12. 尺度信頼性分析 (Scale Reliability / Cronbach's Alpha)")
             st.caption("アンケート尺度などの内的一貫性をクロンバックのα係数で評価し、逆転項目（負の相関）を自動判別します。")
-            rel_vars = st.multiselect("信頼性を分析する尺度項目 (数値変数):", numeric_columns, default=valid_num_cols[:min(5, len(valid_num_cols))], key="rel_vars")
+            rel_vars = st.multiselect("信頼性を分析する尺度項目 (数値変数):", numeric_columns, default=[], key="rel_vars")
             
             if st.button("🚀 信頼性分析を実行", key="run_rel", type="primary"):
                 if len(rel_vars) >= 2:
@@ -1326,6 +1373,242 @@ def main():
                     st.write("**項目削除時αプロット**")
                     with st.container(height=450):
                         st.image(res["fig_bytes"], use_column_width=True)
+
+        # 13. 共分散構造分析 / パス解析 (SEM)
+        elif "13. 共分散構造分析" in stat_method_4:
+            st.subheader("13. 共分散構造分析 / パス解析 (SEM: Structural Equation Modeling)")
+            st.markdown("""
+            **直感的な「矢印（From ➔ To）」のペアリングで、媒介分析・パス解析から潜在変数を含む共分散構造分析まで自由にモデリングできます。**
+            - **潜在変数（因子）の作成**: 複数のアンケート項目をまとめる因子を定義（省略して観測変数のみのパス解析も可能）
+            - **構造モデル（パス）の指定**: 原因変数（From）➔ 結果変数（To）の矢印をペアで追加
+            - **共分散（相関）**: 原因となる外生変数同士の相関は自動考慮（個別指定も可能）
+            """)
+
+            # モデルプリセット読み込み (サンプルデータ等向け)
+            c_pre1, c_pre2, _ = st.columns([1.5, 1.2, 2])
+            with c_pre1:
+                if st.button("💡 演習用 媒介モデルを設定 (意欲 ➔ 満足度 ➔ 得点)", key="btn_preset_med"):
+                    st.session_state["sem_latents"] = []
+                    # 存在する列で設定
+                    p_list = []
+                    if "Q1_意欲" in df.columns and "学習満足度" in df.columns:
+                        p_list.append({"from": "Q1_意欲", "to": "学習満足度"})
+                    if "学習満足度" in df.columns and "事後テスト得点" in df.columns:
+                        p_list.append({"from": "学習満足度", "to": "事後テスト得点"})
+                    if "Q1_意欲" in df.columns and "事後テスト得点" in df.columns:
+                        p_list.append({"from": "Q1_意欲", "to": "事後テスト得点"})
+                    if not p_list and len(numeric_columns) >= 3:
+                        p_list = [
+                            {"from": numeric_columns[0], "to": numeric_columns[1]},
+                            {"from": numeric_columns[1], "to": numeric_columns[2]},
+                            {"from": numeric_columns[0], "to": numeric_columns[2]}
+                        ]
+                    st.session_state["sem_paths"] = p_list
+                    st.session_state["sem_covs"] = []
+                    st.toast("演習用 媒介分析モデルを設定しました！", icon="💡")
+                    st.rerun()
+            with c_pre2:
+                if st.button("🧹 モデル設定をクリア", key="btn_clear_sem"):
+                    st.session_state["sem_latents"] = []
+                    st.session_state["sem_paths"] = []
+                    st.session_state["sem_covs"] = []
+                    st.toast("モデル設定を初期化しました", icon="🧹")
+                    st.rerun()
+
+            st.divider()
+
+            # --- ステップ 1: 潜在変数（因子）の作成 ---
+            with st.expander("① 潜在変数（因子）の作成 (任意・複数観測項目の合成)", expanded=len(st.session_state["sem_latents"]) > 0):
+                st.caption("アンケートの複数項目（観測変数）から構成される「潜在因子」を定義します。観測変数のみのパス解析を行う場合はスキップできます。")
+                c_l1, c_l2, c_l3 = st.columns([1.5, 2.5, 1])
+                with c_l1:
+                    new_latent_name = st.text_input("潜在変数名 (例: 学習意欲):", key="new_latent_name", placeholder="因子名を入力...")
+                with c_l2:
+                    new_latent_inds = st.multiselect("構成する観測項目 (数値変数):", numeric_columns, default=[], key="new_latent_inds")
+                with c_l3:
+                    st.write("")
+                    st.write("")
+                    if st.button("➕ 潜在変数を追加", key="btn_add_latent", use_container_width=True):
+                        if new_latent_name and len(new_latent_inds) >= 2:
+                            # 重複チェック
+                            existing_names = [l["name"] for l in st.session_state["sem_latents"]]
+                            if new_latent_name in existing_names:
+                                st.warning("同名の潜在変数が既に存在します。")
+                            else:
+                                st.session_state["sem_latents"].append({
+                                    "name": new_latent_name, "indicators": new_latent_inds
+                                })
+                                st.toast(f"潜在変数 『{new_latent_name}』 を作成しました！", icon="✨")
+                                st.rerun()
+                        else:
+                            st.warning("潜在変数名と2つ以上の観測項目を指定してください。")
+
+                if st.session_state["sem_latents"]:
+                    st.markdown("**📋 登録済み 潜在変数一覧:**")
+                    for l_idx, l_data in enumerate(st.session_state["sem_latents"]):
+                        c_li1, c_li2 = st.columns([4, 1])
+                        with c_li1:
+                            st.info(f"🔹 **{l_data['name']}** =~ " + " + ".join([f"`{ind}`" for ind in l_data['indicators']]))
+                        with c_li2:
+                            if st.button("🗑 削除", key=f"del_latent_{l_idx}", use_container_width=True):
+                                st.session_state["sem_latents"].pop(l_idx)
+                                st.rerun()
+
+            # --- ステップ 2: 矢印（パス: From ➔ To）の指定 ---
+            st.markdown("#### ② 構造モデル（矢印パス: 原因 ➔ 結果）の指定")
+            latent_names = [l["name"] for l in st.session_state["sem_latents"]]
+            all_choice_vars = latent_names + all_columns
+
+            c_p1, c_p2, c_p3 = st.columns([2, 2, 1.2])
+            with c_p1:
+                from_v = st.selectbox("原因変数 (From ➔):", all_choice_vars, index=None, placeholder="原因変数を選択...", key="sem_from")
+            with c_p2:
+                to_options = [c for c in all_choice_vars if c != from_v]
+                to_v = st.selectbox("結果変数 (➔ To):", to_options, index=None, placeholder="結果変数を選択...", key="sem_to")
+            with c_p3:
+                st.write("")
+                st.write("")
+                if st.button("➕ 矢印 (パス) を追加", key="btn_add_path", type="primary", use_container_width=True):
+                    if from_v and to_v:
+                        # 重複チェック
+                        already = any(p["from"] == from_v and p["to"] == to_v for p in st.session_state["sem_paths"])
+                        if already:
+                            st.warning("既に同じパスが登録されています。")
+                        else:
+                            st.session_state["sem_paths"].append({"from": from_v, "to": to_v})
+                            st.toast(f"パス 『{from_v} ➔ {to_v}』 を追加しました！", icon="➡️")
+                            st.rerun()
+                    else:
+                        st.warning("From と To の変数をそれぞれ選択してください。")
+
+            # 登録済みパスの表示
+            if st.session_state["sem_paths"]:
+                st.markdown("**📋 登録されたパス一覧 (構造方程式):**")
+                cols_grid = st.columns(3)
+                for p_idx, p_item in enumerate(st.session_state["sem_paths"]):
+                    with cols_grid[p_idx % 3]:
+                        cp_a, cp_b = st.columns([3, 1])
+                        with cp_a:
+                            st.success(f"**`{p_item['from']}`** ➔ **`{p_item['to']}`**")
+                        with cp_b:
+                            if st.button("✖", key=f"del_path_{p_idx}"):
+                                st.session_state["sem_paths"].pop(p_idx)
+                                st.rerun()
+
+            # --- ステップ 3: 共分散（相関 ↔）の設定 ---
+            with st.expander("③ 共分散・相関（双方向矢印 ↔）の設定", expanded=False):
+                auto_exog_cov = st.checkbox(
+                    "☑️ 原因となる外生変数（他の変数から矢印が入らない変数）同士の相関（共分散）を自動的に仮定する (推奨: 標準的SEM仕様)",
+                    value=True, key="sem_auto_cov"
+                )
+                st.caption("※ チェックを入れると、原因変数同士の事前相関が自動的にモデルに含まれます。")
+                
+                st.markdown("**個別に特定の変数・誤差間の相関（↔）を追加する場合:**")
+                c_cov1, c_cov2, c_cov3 = st.columns([2, 2, 1.2])
+                with c_cov1:
+                    cov_v1 = st.selectbox("変数1 (↔):", all_choice_vars, index=None, placeholder="変数1...", key="sem_cov1")
+                with c_cov2:
+                    cov_v2_opts = [c for c in all_choice_vars if c != cov_v1]
+                    cov_v2 = st.selectbox("変数2 (↔):", cov_v2_opts, index=None, placeholder="変数2...", key="sem_cov2")
+                with c_cov3:
+                    st.write("")
+                    st.write("")
+                    if st.button("➕ 相関を追加", key="btn_add_cov", use_container_width=True):
+                        if cov_v1 and cov_v2:
+                            st.session_state["sem_covs"].append({"var1": cov_v1, "var2": cov_v2})
+                            st.toast(f"共分散 『{cov_v1} ↔ {cov_v2}』 を追加しました！", icon="↔️")
+                            st.rerun()
+                        else:
+                            st.warning("2つの変数を選択してください。")
+
+                if st.session_state["sem_covs"]:
+                    st.markdown("**個別指定された共分散一覧:**")
+                    for c_idx, c_item in enumerate(st.session_state["sem_covs"]):
+                        cc1, cc2 = st.columns([4, 1])
+                        with cc1:
+                            st.caption(f"↔️ `{c_item['var1']}` ↔ `{c_item['var2']}`")
+                        with cc2:
+                            if st.button("✖", key=f"del_cov_{c_idx}"):
+                                st.session_state["sem_covs"].pop(c_idx)
+                                st.rerun()
+
+            st.divider()
+
+            # --- 分析実行 ---
+            if st.button("🚀 共分散構造分析 (SEM) / パス解析を実行", key="run_sem", type="primary"):
+                if st.session_state["sem_paths"]:
+                    try:
+                        with st.spinner("共分散構造分析モデルの最尤推定・適合度計算・パス図描画を実行中..."):
+                            param_df, fit_df, indirect_df, note, fig_bytes = stats_engine.analyze_sem(
+                                df,
+                                latent_defs=st.session_state["sem_latents"],
+                                paths=st.session_state["sem_paths"],
+                                covariances=st.session_state["sem_covs"],
+                                auto_exogenous_cov=auto_exog_cov
+                            )
+                            st.session_state["results"]["sem"] = {
+                                "param_df": param_df, "fit_df": fit_df, "indirect_df": indirect_df,
+                                "note": note, "fig_bytes": fig_bytes
+                            }
+                        st.toast("共分散構造分析 (SEM) の推定が完了しました！", icon="🎉")
+                    except Exception as e:
+                        st.error(f"SEM分析エラー: {e}")
+                else:
+                    st.warning("1つ以上の矢印（パス）を追加してください。")
+
+            # --- 結果の表示 ---
+            if "sem" in st.session_state["results"]:
+                res = st.session_state["results"]["sem"]
+                
+                if st.button("➕ この結果をExcelレポートに追加 (適合度表 & パラメータ表 & パス図)", key="btn_add_sem"):
+                    st.session_state["analysis_queue"].append({
+                        "sheet_name": "共分散構造分析",
+                        "title": "共分散構造分析 (SEM) パラメータ推定値一覧表",
+                        "df": res["param_df"],
+                        "note": res["note"],
+                        "extra_title": "モデル適合度指標サマリー",
+                        "extra_df": res["fit_df"],
+                        "extra_title_2": "媒介効果・間接効果の分解",
+                        "extra_df_2": res["indirect_df"],
+                        "fig_bytes": res["fig_bytes"]
+                    })
+                    st.toast("『共分散構造分析 (SEM) 結果』をレポートリストに追加しました！", icon="📋")
+                    st.rerun()
+
+                st.markdown("### 📊 分析結果サマリー")
+                
+                # 適合度のハイライト表示
+                cfi_val = res["fit_df"].loc["CFI (適合度指数)", "値"] if "CFI (適合度指数)" in res["fit_df"].index else 0.95
+                rmsea_val = res["fit_df"].loc["RMSEA (二乗平均平方根誤差)", "値"] if "RMSEA (二乗平均平方根誤差)" in res["fit_df"].index else 0.05
+                chi_df_val = res["fit_df"].loc["χ²/df 比", "値"] if "χ²/df 比" in res["fit_df"].index else 1.5
+                
+                m1, m2, m3 = st.columns(3)
+                with m1:
+                    st.metric("CFI (適合度指数)", f"{cfi_val:.3f}", delta="良好 (≥ .95)" if cfi_val >= 0.95 else ("許容 (≥ .90)" if cfi_val >= 0.90 else "要改善"))
+                with m2:
+                    st.metric("RMSEA (誤差二乗平均)", f"{rmsea_val:.3f}", delta="優秀 (≤ .05)" if rmsea_val <= 0.05 else ("良好 (≤ .08)" if rmsea_val <= 0.08 else "不良"), delta_color="inverse")
+                with m3:
+                    st.metric("χ² / df 比", f"{chi_df_val:.2f}", delta="良好 (< 2.0)" if chi_df_val < 2.0 else ("許容 (< 3.0)" if chi_df_val < 3.0 else "不良"), delta_color="inverse")
+
+                c_res_l, c_res_r = st.columns([2.6, 2.2])
+                with c_res_l:
+                    st.markdown("**1. パラメータ推定値表 (APA Style)**")
+                    st.dataframe(res["param_df"], use_container_width=True)
+                    st.caption(res["note"])
+                    
+                    st.markdown("**2. モデル適合度指標一覧**")
+                    st.dataframe(res["fit_df"], use_container_width=True)
+                    
+                    if not res["indirect_df"].empty:
+                        st.markdown("**3. 媒介効果・間接効果の分解**")
+                        st.dataframe(res["indirect_df"], use_container_width=True)
+                        st.caption("注. 総合効果 = 直接効果 + 間接効果。媒介比率は総合効果に対する間接効果の割合を表します。")
+                        
+                with c_res_r:
+                    st.markdown("**📐 パスダイアグラム (Path Diagram)**")
+                    with st.container(height=520):
+                        st.image(res["fig_bytes"], use_column_width=True)
+
 
 
 if __name__ == "__main__":
