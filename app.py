@@ -1618,29 +1618,49 @@ def main():
                             show_ns_opt = st.checkbox("非有意なパス (点線) も表示", value=True, key="sem_show_ns")
 
                     # カスタマイズ設定に基づきリアルタイム再描画
-                    if model_meta:
-                        curr_fig_bytes = stats_engine.render_sem_path_diagram(
-                            param_df=res["param_df"],
-                            fit_df=res["fit_df"],
-                            latent_names=model_meta.get("latent_names", []),
-                            paths=model_meta.get("paths", []),
-                            r2_map=model_meta.get("r2_map", {}),
-                            exogenous_vars=model_meta.get("exogenous_vars", []),
-                            all_model_vars=model_meta.get("all_model_vars", []),
-                            show_r2=show_r2_opt,
-                            font_size=font_sz,
-                            fig_width=fig_w,
-                            fig_height=fig_h,
-                            color_theme=theme_choice,
-                            show_fit_footer=True,
-                            coef_type=coef_choice,
-                            show_insignificant=show_ns_opt
-                        )
-                    else:
-                        curr_fig_bytes = res["fig_bytes"]
+                    # model_meta が前回のセッション等で欠落していても確実に復元
+                    if not model_meta:
+                        param_df_temp = res.get("param_df", pd.DataFrame())
+                        fb_paths = []
+                        fb_exog = set()
+                        fb_endog = set()
+                        for idx_val in param_df_temp.index:
+                            if " → " in str(idx_val):
+                                f_part, t_part = str(idx_val).split(" → ")
+                                fb_paths.append({"from": f_part, "to": t_part})
+                                fb_exog.add(f_part)
+                                fb_endog.add(t_part)
+                        fb_latents = [l["name"] for l in st.session_state.get("sem_latents", [])]
+                        fb_all = list(set(fb_exog | fb_endog))
+                        fb_pure_exog = list(fb_exog - fb_endog)
+                        model_meta = {
+                            "latent_names": fb_latents,
+                            "paths": fb_paths if fb_paths else st.session_state.get("sem_paths", []),
+                            "r2_map": {},
+                            "exogenous_vars": fb_pure_exog,
+                            "all_model_vars": fb_all
+                        }
 
-                    with st.container(height=480):
-                        st.image(curr_fig_bytes, use_column_width=True)
+                    curr_fig_bytes = stats_engine.render_sem_path_diagram(
+                        param_df=res["param_df"],
+                        fit_df=res["fit_df"],
+                        latent_names=model_meta.get("latent_names", []),
+                        paths=model_meta.get("paths", []),
+                        r2_map=model_meta.get("r2_map", {}),
+                        exogenous_vars=model_meta.get("exogenous_vars", []),
+                        all_model_vars=model_meta.get("all_model_vars", []),
+                        show_r2=show_r2_opt,
+                        font_size=font_sz,
+                        fig_width=fig_w,
+                        fig_height=fig_h,
+                        color_theme=theme_choice,
+                        show_fit_footer=True,
+                        coef_type=coef_choice,
+                        show_insignificant=show_ns_opt
+                    )
+
+                    # 動的にサイズ変更が反映されるように直接描画
+                    st.image(curr_fig_bytes, use_container_width=True)
 
                     c_dl_img, _ = st.columns([2, 1])
                     with c_dl_img:
