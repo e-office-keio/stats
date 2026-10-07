@@ -40,19 +40,41 @@ def format_apa_table(ws, start_row, title, df, note=None, table_num=1, is_factor
     ws.cell(row=current_row, column=1).font = Font(name=font_family, size=11, italic=True)
     current_row += 1
     
+    # 統計記号判定ロジック (APAスタイル: N, M, SD, t, p, F, r, β, d, η², χ², df, OR, α 等はイタリック体)
+    stat_keywords = [
+        " (N)", " (n)", " (M)", " (SD)", " (Mdn)", " (IQR)", " (SE)", " (df)", " (d)", " (d_z)",
+        " (β)", " (η²)", " (ηp²)", " (OR)", " (h²)", " (B)", " (χ²)", " (r)",
+        "M (SD)", "t値", "p値", "F値", "z値", "β", "df", "CFI", "TLI", "RMSEA", "SRMR", "AIC", "BIC"
+    ]
+    stat_exact = {
+        "N", "n", "M", "SD", "Mdn", "IQR", "SE", "t", "F", "p", "r", "R", "R²", "B", "β", "z",
+        "d", "d_z", "η²", "ηp²", "ω²", "χ²", "df", "AIC", "BIC", "CFI", "TLI", "RMSEA", "SRMR",
+        "OR", "VIF", "α", "λ", "h²", "MS", "SS"
+    }
+
+    def is_stat_symbol(text):
+        s = str(text).strip()
+        if s in stat_exact:
+            return True
+        for kw in stat_keywords:
+            if kw in s:
+                return True
+        return False
+
     header_row = current_row
     num_cols = len(df.columns) + 1  # インデックス + 列数
     
     # ヘッダー行の書き込み
     idx_name = df.index.name if df.index.name else ""
     cell = ws.cell(row=header_row, column=1, value=str(idx_name))
-    cell.font = Font(name=font_family, size=11, bold=True)
+    cell.font = Font(name=font_family, size=11, bold=True, italic=is_stat_symbol(idx_name))
     cell.alignment = Alignment(horizontal="left", vertical="center")
     cell.border = Border(top=thick_side, bottom=thin_side)
     
     for c_idx, col_name in enumerate(df.columns, start=2):
         cell = ws.cell(row=header_row, column=c_idx, value=str(col_name))
-        cell.font = Font(name=font_family, size=11, bold=True)
+        is_it = is_stat_symbol(col_name)
+        cell.font = Font(name=font_family, size=11, bold=True, italic=is_it)
         cell.alignment = Alignment(horizontal="right", vertical="center")
         cell.border = Border(top=thick_side, bottom=thin_side)
         
@@ -61,7 +83,7 @@ def format_apa_table(ws, start_row, title, df, note=None, table_num=1, is_factor
     
     # 因子分析の判定
     factor_cols_indices = [i + 2 for i, c in enumerate(df.columns) if "第" in str(c) and "因子" in str(c)]
-    stat_row_keywords = ["因子寄与", "寄与率", "累積寄与率", "分散説明率", "負荷量二乗和"]
+    stat_row_keywords = ["因子寄与", "寄与率", "累積寄与率", "分散説明率", "負荷量二乗和", "カイ二乗", "自由度", "CFI", "TLI", "RMSEA", "SRMR", "AIC", "BIC", "切片", "F値", "p値"]
     first_stat_row_idx = None
     
     for r_idx, idx_val in enumerate(df.index):
@@ -75,7 +97,8 @@ def format_apa_table(ws, start_row, title, df, note=None, table_num=1, is_factor
         idx_cell = ws.cell(row=r, column=1, value=str(idx_val))
         
         is_stat_row = any(kw in str(idx_val) for kw in stat_row_keywords)
-        idx_cell.font = Font(name=font_family, size=11, bold=is_stat_row)
+        is_idx_stat = is_stat_symbol(idx_val)
+        idx_cell.font = Font(name=font_family, size=11, bold=is_stat_row, italic=is_idx_stat)
         idx_cell.alignment = Alignment(horizontal="left", vertical="center")
         
         # 因子分析の統計値行の境界線（観測変数と寄与率の間の区切り罫線）
@@ -134,7 +157,7 @@ def format_apa_table(ws, start_row, title, df, note=None, table_num=1, is_factor
         
     current_row = data_end_row + 1
     
-    # 3. 注釈 (Note -> 注)
+    # 3. 注釈 (Note -> 注) (常にイタリック体)
     if note:
         note_text = note if note.startswith("注.") else f"注. {note}"
         note_cell = ws.cell(row=current_row, column=1, value=note_text)

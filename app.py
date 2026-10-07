@@ -726,10 +726,18 @@ def main():
             
             if st.button("🚀 基本統計量を計算", key="run_desc", type="primary"):
                 if selected_num_vars:
-                    with st.spinner("基本統計量と分布プロットを作成中..."):
-                        res_df, hist_dict, note, fig_bytes = stats_engine.analyze_descriptives(df, selected_num_vars)
+                    with st.spinner("基本統計量と変数ごとの分布プロットを作成中..."):
+                        desc_res = stats_engine.analyze_descriptives(df, selected_num_vars)
+                        if len(desc_res) == 5:
+                            res_df, hist_dict, note, fig_bytes, fig_dict = desc_res
+                        else:
+                            res_df, hist_dict, note, fig_bytes = desc_res
+                            fig_dict = {selected_num_vars[0]: fig_bytes} if selected_num_vars else {}
+                            
                         st.session_state["results"]["desc"] = {
-                            "res_df": res_df, "hist_dict": hist_dict, "note": note, "fig_bytes": fig_bytes
+                            "res_df": res_df, "hist_dict": hist_dict, "note": note,
+                            "fig_bytes": fig_bytes, "fig_dict": fig_dict,
+                            "selected_num_vars": selected_num_vars
                         }
                     st.toast("基本統計量の計算が完了しました！", icon="✅")
                 else:
@@ -737,27 +745,70 @@ def main():
                     
             if "desc" in st.session_state["results"]:
                 res = st.session_state["results"]["desc"]
+                fig_dict = res.get("fig_dict", {})
+                hist_dict = res.get("hist_dict", {})
+                num_vars_list = res.get("selected_num_vars", list(res["res_df"].index))
                 
-                if st.button("➕ この結果をExcelレポートに追加 (表 & 分布図を同一シートに出力)", key="btn_add_desc"):
-                    st.session_state["analysis_queue"].append({
-                        "sheet_name": "基本統計量",
-                        "title": "選択変数の基本統計量一覧表",
-                        "df": res["res_df"],
-                        "note": res["note"],
-                        "fig_bytes": res["fig_bytes"]
-                    })
-                    st.toast("『基本統計量 & 分布プロット』をレポートリストに追加しました！", icon="📋")
-                    st.rerun()
+                c_btn_d1, c_btn_d2 = st.columns([1.5, 1.5])
+                with c_btn_d1:
+                    if st.button("➕ 変数ごとに個別シートでExcelに追加 (度数表 & 分布図)", key="btn_add_desc_separate"):
+                        for var_name in num_vars_list:
+                            var_hist_df = hist_dict.get(var_name, pd.DataFrame())
+                            var_fig = fig_dict.get(var_name, res["fig_bytes"])
+                            st.session_state["analysis_queue"].append({
+                                "sheet_name": f"分布_{var_name}",
+                                "title": f"{var_name} の度数分布 & 基本統計量",
+                                "df": var_hist_df if not var_hist_df.empty else res["res_df"].loc[[var_name]],
+                                "note": res["note"],
+                                "fig_bytes": var_fig
+                            })
+                        st.toast(f"『基本統計量 (変数ごと {len(num_vars_list)} シート)』をレポートリストに追加しました！", icon="📋")
+                        st.rerun()
+                with c_btn_d2:
+                    if st.button("➕ 全変数の基本統計量一覧表を1シートに追加", key="btn_add_desc_summary"):
+                        st.session_state["analysis_queue"].append({
+                            "sheet_name": "基本統計量_サマリー",
+                            "title": "選択変数の基本統計量一覧表",
+                            "df": res["res_df"],
+                            "note": res["note"],
+                            "fig_bytes": res["fig_bytes"]
+                        })
+                        st.toast("『基本統計量一覧表』をレポートリストに追加しました！", icon="📋")
+                        st.rerun()
 
-                c1, c2 = st.columns([2.5, 2])
+                c1, c2 = st.columns([2.2, 2.2])
                 with c1:
-                    st.write("**基本統計量一覧**")
+                    st.write("**📋 基本統計量一覧 (APA Style)**")
                     st.dataframe(res["res_df"], use_container_width=True)
                     st.caption(res["note"])
+                    
                 with c2:
-                    st.write("**分布プロット (ヒストグラム & 確率密度)**")
-                    with st.container(height=480):
-                        st.image(res["fig_bytes"], use_column_width=True)
+                    st.write("**📈 変数ごとの分布プロット (ヒストグラム & 確率密度)**")
+                    if fig_dict:
+                        active_plot_var = st.selectbox(
+                            "表示する変数を選択:",
+                            list(fig_dict.keys()),
+                            key="select_desc_plot_var"
+                        )
+                        if active_plot_var in fig_dict:
+                            st.image(fig_dict[active_plot_var], use_container_width=True)
+                            
+                            c_dl_v1, _ = st.columns([2, 1])
+                            with c_dl_v1:
+                                st.download_button(
+                                    label=f"📥 『{active_plot_var}』の分布図を保存 (.png)",
+                                    data=fig_dict[active_plot_var],
+                                    file_name=f"分布プロット_{active_plot_var}.png",
+                                    mime="image/png",
+                                    use_container_width=True,
+                                    key=f"dl_plot_{active_plot_var}"
+                                )
+                            
+                            if active_plot_var in hist_dict:
+                                with st.expander(f"📊 『{active_plot_var}』の度数分布テーブル", expanded=False):
+                                    st.dataframe(hist_dict[active_plot_var], use_container_width=True)
+                    else:
+                        st.image(res["fig_bytes"], use_container_width=True)
 
         # 3. クロス集計
         elif "3. クロス集計" in stat_method_1:

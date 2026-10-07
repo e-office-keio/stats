@@ -449,7 +449,7 @@ def analyze_frequency(df, var_name):
     
     fig, ax = plt.subplots(figsize=(6, 4))
     bars = ax.bar(res_df.index.astype(str), res_df["度数 (N)"], color="#2b5c8f", edgecolor="black", width=0.5)
-    ax.set_ylabel("度数 (N)")
+    ax.set_ylabel("度数 ($N$)")
     ax.set_xlabel(str(var_name))
     ax.set_title(f"{var_name} の度数分布")
     
@@ -458,7 +458,7 @@ def analyze_frequency(df, var_name):
         ax.text(bar.get_x() + bar.get_width()/2, yval + (max(counts)*0.01), f"{int(yval)}", ha='center', va='bottom', fontsize=10)
         
     fig_bytes = fig_to_bytes(fig)
-    note = f"全サンプル数 N = {len(series)}。欠損値は除外されています。"
+    note = f"注. 全サンプル数 $N$ = {len(series)}。欠損値は除外されています。"
     
     return res_df, note, fig_bytes
 
@@ -501,8 +501,27 @@ def analyze_descriptives(df, num_vars):
         hist_dict[var] = pd.DataFrame(hist_records).set_index("階級 (区間)")
         
     res_df = pd.DataFrame(records).set_index("変数名")
-    
-    # Web画面用: ヒストグラム & 確率密度曲線 (KDE)
+
+    # 変数ごとの個別プロット (ヒストグラム & 確率密度曲線)
+    fig_dict = {}
+    for var in num_vars:
+        s = df[var].dropna()
+        if len(s) == 0:
+            continue
+        fig_single, ax_single = plt.subplots(figsize=(6, 3.8))
+        sns.histplot(s, kde=True, ax=ax_single, color="#1e3a8a", edgecolor="white", linewidth=0.6)
+        m_val = s.mean()
+        mdn_val = s.median()
+        ax_single.axvline(m_val, color="#dc2626", linestyle="--", linewidth=1.2, label=f"平均値 $M$: {m_val:.2f}")
+        ax_single.axvline(mdn_val, color="#059669", linestyle=":", linewidth=1.2, label=f"中央値 $Mdn$: {mdn_val:.2f}")
+        ax_single.set_title(f"{var} のデータ分布 (ヒストグラム & 確率密度)")
+        ax_single.set_xlabel(str(var))
+        ax_single.set_ylabel("度数 ($N$) / 確率密度")
+        ax_single.legend(fontsize=9, loc="upper right")
+        plt.tight_layout()
+        fig_dict[var] = fig_to_bytes(fig_single)
+
+    # Web画面互換用: 全変数を縦に結合した全体プロット
     fig, axes = plt.subplots(len(num_vars), 1, figsize=(6, 3.2 * len(num_vars)))
     if len(num_vars) == 1:
         axes = [axes]
@@ -510,16 +529,16 @@ def analyze_descriptives(df, num_vars):
     for i, var in enumerate(num_vars):
         ax = axes[i]
         s = df[var].dropna()
-        sns.histplot(s, kde=True, ax=ax, color="#34495e", edgecolor="white", linewidth=0.5)
+        sns.histplot(s, kde=True, ax=ax, color="#1e3a8a", edgecolor="white", linewidth=0.5)
         ax.set_title(f"{var} のデータ分布 (ヒストグラム & 確率密度)")
         ax.set_xlabel(str(var))
-        ax.set_ylabel("度数 / 密度")
+        ax.set_ylabel("度数 ($N$) / 密度")
         
     plt.tight_layout()
     fig_bytes = fig_to_bytes(fig)
     
-    note = "M = 平均値; SD = 標準偏差; Mdn = 中央値; IQR = 四分位範囲。"
-    return res_df, hist_dict, note, fig_bytes
+    note = "注. $M$ = 平均値; $SD$ = 標準偏差; $Mdn$ = 中央値; $IQR$ = 四分位範囲。"
+    return res_df, hist_dict, note, fig_bytes, fig_dict
 
 
 # ----------------------------------------------------------------------
@@ -583,7 +602,7 @@ def analyze_crosstab(df, row_var, col_var):
     fig_bytes = fig_to_bytes(fig)
     
     p_str = "< .001" if p < 0.001 else f"= {p:.3f}"
-    note = f"注. 表内の数値は 度数 (列方向の%) を表します。カイ二乗検定: χ²({dof}) = {chi2:.2f}, p {p_str}, クラメールのV = {cramers_v:.2f}。"
+    note = f"注. 表内の数値は 度数 (列方向の%) を表します。カイ二乗検定: $\\chi^2$({dof}) = {chi2:.2f}, $p$ {p_str}, クラメールの$V$ = {cramers_v:.2f}。"
     
     return ct_formatted_df, pct_df, note, fig_bytes
 
@@ -613,13 +632,13 @@ def analyze_ttest(df, group_var, num_var, equal_var=False):
         df_val = float(n1 + n2 - 2)
         s_pooled = np.sqrt(((n1 - 1) * sd1**2 + (n2 - 1) * sd2**2) / df_val)
         cohens_d = float((m1 - m2) / s_pooled) if s_pooled != 0 else 0.0
-        test_type = "Studentのt検定 (等分散仮定)"
+        test_type = "Studentの$t$検定 (等分散仮定)"
     else:
         v1, v2 = sd1**2 / n1, sd2**2 / n2
         df_val = float((v1 + v2)**2 / ((v1**2 / (n1 - 1)) + (v2**2 / (n2 - 1))))
         s_pooled = np.sqrt((sd1**2 + sd2**2) / 2)
         cohens_d = float((m1 - m2) / s_pooled) if s_pooled != 0 else 0.0
-        test_type = "Welchのt検定 (等分散非仮定)"
+        test_type = "Welchの$t$検定 (等分散非仮定)"
         
     tt_df = pd.DataFrame([{
         "従属変数": str(num_var),
@@ -637,14 +656,14 @@ def analyze_ttest(df, group_var, num_var, equal_var=False):
     labels = [str(g1_val), str(g2_val)]
     
     bars = ax.bar(labels, means, yerr=errors, capsize=5, color=['#4c72b0', '#55a868'], edgecolor='black', width=0.4)
-    ax.set_ylabel(str(num_var))
+    ax.set_ylabel(f"{num_var} の平均値 ($M$)")
     ax.set_xlabel(str(group_var))
-    ax.set_title(f"{group_var} による {num_var} の平均値比較 (95%CI)")
+    ax.set_title(f"{group_var} による {num_var} の平均値比較 (95% CI)")
     plt.tight_layout()
     fig_bytes = fig_to_bytes(fig)
     
     p_str = "< .001" if p_val < 0.001 else f"= {p_val:.3f}"
-    note = f"注. {test_type}: t({df_val:.2f}) = {t_val:.2f}, p {p_str}, Cohen's d = {cohens_d:.2f}。サンプルサイズ: {g1_val} (N={n1}), {g2_val} (N={n2})。"
+    note = f"注. {test_type}: $t$({df_val:.2f}) = {t_val:.2f}, $p$ {p_str}, Cohen's $d$ = {cohens_d:.2f}。サンプルサイズ: {g1_val} ($N$={n1}), {g2_val} ($N$={n2})。"
     
     return tt_df, note, fig_bytes
 
@@ -691,12 +710,12 @@ def analyze_anova(df, group_var, num_var):
     sns.barplot(data=clean_df, x=group_var, y=num_var, hue=group_var, ax=ax, capsize=0.1, palette="Blues_d", edgecolor="black", legend=False)
     ax.set_title(f"一元配置分散分析: {group_var} × {num_var}")
     ax.set_xlabel(str(group_var))
-    ax.set_ylabel(str(num_var))
+    ax.set_ylabel(f"{num_var} の平均値 ($M$)")
     plt.tight_layout()
     fig_bytes = fig_to_bytes(fig)
     
     p_str = "< .001" if p_val < 0.001 else f"= {p_val:.3f}"
-    note = f"注. 分散分析: F({df_between}, {df_within}) = {f_val:.2f}, p {p_str}, 効果量 η² = {eta_sq:.2f}。"
+    note = f"注. 分散分析: $F$({df_between}, {df_within}) = {f_val:.2f}, $p$ {p_str}, 効果量 $\\eta^2$ = {eta_sq:.2f}。"
     
     return anova_df, tukey_df, note, fig_bytes
 
@@ -746,12 +765,12 @@ def analyze_correlation(df, num_vars, method="pearson"):
     method_jp = "ピアソン" if method == "pearson" else "スピアマン"
     fig, ax = plt.subplots(figsize=(6, 5))
     sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap="coolwarm", vmin=-1, vmax=1,
-                xticklabels=num_vars, yticklabels=num_vars, ax=ax, cbar_kws={'label': f'{method_jp} 相関係数 r'})
-    ax.set_title(f"{method_jp} 相関係数ヒートマップ")
+                xticklabels=num_vars, yticklabels=num_vars, ax=ax, cbar_kws={'label': f'{method_jp} 相関係数 $r$'})
+    ax.set_title(f"{method_jp} 相関係数ヒートマップ ($r$)")
     plt.tight_layout()
     fig_bytes = fig_to_bytes(fig)
     
-    note = f"全サンプル数 N = {len(clean_df)}。* p < .05, ** p < .01, *** p < .001。"
+    note = f"注. 全サンプル数 $N$ = {len(clean_df)}。* $p$ < .05, ** $p$ < .01, *** $p$ < .001。"
     return display_df, note, fig_bytes
 
 
@@ -817,7 +836,7 @@ def analyze_regression(df, target_var, feature_vars):
     f_p = model.f_pvalue
     p_str = "< .001" if f_p < 0.001 else f"= {f_p:.3f}"
     
-    note = f"目的変数: {target_var}。決定係数 R² = {r2:.3f}, 自由度調整済み R² = {adj_r2:.3f}, F({len(feature_vars)}, {len(clean_df)-len(feature_vars)-1}) = {f_stat:.2f}, p {p_str}。"
+    note = f"注. 目的変数: {target_var}。決定係数 $R^2$ = {r2:.3f}, 自由度調整済み $R^2$ = {adj_r2:.3f}, $F$({len(feature_vars)}, {len(clean_df)-len(feature_vars)-1}) = {f_stat:.2f}, $p$ {p_str}。"
     return res_df, note, fig_bytes
 
 
@@ -918,17 +937,17 @@ def analyze_factor_analysis(df, num_vars, n_factors=2, rotation="promax"):
     ev_real = np.real(ev)
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.plot(range(1, len(ev_real) + 1), ev_real, marker='o', color='#2b5c8f', linewidth=2)
-    ax.axhline(1.0, color='red', linestyle='--', label='カイザー基準 (固有値 = 1.0)')
+    ax.axhline(1.0, color='red', linestyle='--', label='カイザー基準 (固有値 $\\lambda$ = 1.0)')
     ax.set_title("スクリープロット (固有値の推移)")
     ax.set_xlabel("因子番号")
-    ax.set_ylabel("固有値 (Eigenvalue)")
+    ax.set_ylabel("固有値 ($Eigenvalue$)")
     ax.set_xticks(range(1, len(ev_real) + 1))
     ax.legend()
     plt.tight_layout()
     fig_bytes = fig_to_bytes(fig)
     
     rot_jp = "プロマックス回転" if rotation == "promax" else "バリマックス回転"
-    note = f"注. 因子回転法: {rot_jp}。主因子の負荷量順に項目をソート済み。太字は各項目の主因子負荷量を表します。総サンプル数 N = {len(clean_df)}。"
+    note = f"注. 因子回転法: {rot_jp}。主因子の負荷量順に項目をソート済み。太字は各項目の主因子負荷量を表します。総サンプル数 $N$ = {len(clean_df)}。"
     
     combined_df = pd.concat([sorted_loadings_df, variance_df], axis=0)
     
@@ -1009,7 +1028,7 @@ def analyze_reliability(df, num_vars):
             max_v = corrected_df[r_var].max()
             corrected_df[r_var] = (min_v + max_v) - corrected_df[r_var]
         alpha_corrected = calc_cronbach_alpha(corrected_df)
-        corrected_note = f" ※逆転項目候補 ({', '.join(reversed_candidates)}) を反転補正した場合の推定 α = {alpha_corrected:.3f}。"
+        corrected_note = f" ※逆転項目候補 ({', '.join(reversed_candidates)}) を反転補正した場合の推定 $\\alpha$ = {alpha_corrected:.3f}。"
 
     # プロット: 項目削除時アルファの棒グラフと全体アルファ基準線
     fig, ax = plt.subplots(figsize=(6.5, max(3.5, k * 0.45)))
@@ -1018,21 +1037,21 @@ def analyze_reliability(df, num_vars):
     colors = ['#d9534f' if r["修正項目-全体相関 (r)"] < 0 else '#2b5c8f' for r in records]
     
     ax.barh(y_pos, alpha_dels, color=colors, edgecolor="black", height=0.55)
-    ax.axvline(alpha, color="red", linestyle="--", linewidth=1.5, label=f"全体 α = {alpha:.3f}")
+    ax.axvline(alpha, color="red", linestyle="--", linewidth=1.5, label=f"全体 $\\alpha$ = {alpha:.3f}")
     if alpha_corrected is not None:
-        ax.axvline(alpha_corrected, color="green", linestyle=":", linewidth=2, label=f"反転補正後 α = {alpha_corrected:.3f}")
+        ax.axvline(alpha_corrected, color="green", linestyle=":", linewidth=2, label=f"反転補正後 $\\alpha$ = {alpha_corrected:.3f}")
         
     ax.set_yticks(y_pos)
     ax.set_yticklabels(num_vars)
     ax.invert_yaxis()
-    ax.set_xlabel("項目削除時のクロンバックのα係数")
-    ax.set_title(f"尺度信頼性プロット (全体 α = {alpha:.3f}, k = {k})")
+    ax.set_xlabel("項目削除時のクロンバックの $\\alpha$ 係数")
+    ax.set_title(f"尺度信頼性プロット (全体 $\\alpha$ = {alpha:.3f}, $k$ = {k})")
     ax.set_xlim(0, 1.0)
     ax.legend(loc="lower right")
     plt.tight_layout()
     fig_bytes = fig_to_bytes(fig)
     
-    note = f"注. 全体尺度 (k = {k}): 現行のクロンバックの α = {alpha:.3f}。サンプルサイズ N = {n}。{corrected_note}"
+    note = f"注. 全体尺度 ($k$ = {k}): 現行のクロンバックの $\\alpha$ = {alpha:.3f}。サンプルサイズ $N$ = {n}。{corrected_note}"
     return res_df, note, fig_bytes, alpha, alpha_corrected, reversed_candidates
 
 
@@ -1086,14 +1105,14 @@ def analyze_paired_ttest(df, var1, var2):
     ax.errorbar([0, 1], means, yerr=errors, fmt='none', ecolor='#2b5c8f', capsize=5, capthick=1.5)
     ax.set_xticks([0, 1])
     ax.set_xticklabels(labels)
-    ax.set_ylabel("平均値 (95% CI)")
+    ax.set_ylabel("平均値 ($M$) [95% CI]")
     ax.set_title(f"対応のある比較: {var1} と {var2}")
     ax.set_xlim(-0.3, 1.3)
     plt.tight_layout()
     fig_bytes = fig_to_bytes(fig)
     
     p_str = "< .001" if p_val < 0.001 else f"= {p_val:.3f}"
-    note = f"注. 対応のあるt検定: t({df_val}) = {t_val:.2f}, p {p_str}, Cohen's d_z = {cohens_dz:.2f}。サンプルサイズ N = {n}。"
+    note = f"注. 対応のある$t$検定: $t$({df_val}) = {t_val:.2f}, $p$ {p_str}, Cohen's $d_z$ = {cohens_dz:.2f}。サンプルサイズ $N$ = {n}。"
     return tt_df, note, fig_bytes
 
 
@@ -1173,12 +1192,12 @@ def analyze_two_way_anova(df, factor1, factor2, dep_var):
                   palette="tab10", err_kws={'linewidth': 1.5})
     ax.set_title(f"二元配置分散分析 交互作用プロット ({factor1} × {factor2})")
     ax.set_xlabel(str(factor1))
-    ax.set_ylabel(f"{dep_var} の平均値 (95% CI)")
+    ax.set_ylabel(f"{dep_var} の平均値 ($M$) [95% CI]")
     ax.legend(title=str(factor2), bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
     fig_bytes = fig_to_bytes(fig)
     
-    note = f"注. 従属変数: {dep_var}。二元配置分散分析 (Type II 平方和)。残差 df = {int(df_resid)}。総サンプルサイズ N = {len(clean_df)}。"
+    note = f"注. 従属変数: {dep_var}。二元配置分散分析 (Type II 平方和)。残差 $df$ = {int(df_resid)}。総サンプルサイズ $N$ = {len(clean_df)}。"
     return anova_df, cell_desc, note, fig_bytes
 
 
@@ -1252,11 +1271,11 @@ def analyze_logistic_regression(df, target_var, feature_vars):
     err_right = [or_uppers[i] - ors[i] for i in range(len(feature_vars))]
     
     ax.errorbar(ors, y_pos, xerr=[err_left, err_right], fmt='o', color='#2b5c8f', ecolor='#2b5c8f', elinewidth=2, capsize=4, capthick=1.5, markersize=7)
-    ax.axvline(1.0, color="red", linestyle="--", linewidth=1.2, label="OR = 1.0 (無効果)")
+    ax.axvline(1.0, color="red", linestyle="--", linewidth=1.2, label="$OR$ = 1.0 (無効果)")
     ax.set_yticks(y_pos)
     ax.set_yticklabels(feature_vars)
     ax.invert_yaxis()
-    ax.set_xlabel("オッズ比 (OR) [対数目盛 / 95% CI]")
+    ax.set_xlabel("オッズ比 ($OR$) [対数目盛 / 95% CI]")
     ax.set_title(f"ロジスティック回帰 フォレストプロット ({target_var})")
     ax.set_xscale("log")
     ax.legend(loc="lower right")
@@ -1270,7 +1289,7 @@ def analyze_logistic_regression(df, target_var, feature_vars):
     llr_p = model.llr_pvalue
     llr_p_str = "< .001" if llr_p < 0.001 else f"= {llr_p:.3f}"
     
-    note = f"注. 目的変数: {target_var} (1 = '{val_1}', 0 = '{val_0}')。McFadden's 疑似R² = {prsquared:.3f}, モデルカイ二乗検定: χ² = {model.llr:.2f}, p {llr_p_str}, AIC = {aic:.2f}, サンプルサイズ N = {n_sample}。"
+    note = f"注. 目的変数: {target_var} (1 = '{val_1}', 0 = '{val_0}')。McFadden's 疑似 $R^2$ = {prsquared:.3f}, モデルカイ二乗検定: $\\chi^2$ = {model.llr:.2f}, $p$ {llr_p_str}, $AIC$ = {aic:.2f}, サンプルサイズ $N$ = {n_sample}。"
     return res_df, note, fig_bytes
 
 
@@ -1591,7 +1610,7 @@ def analyze_sem(df, latent_defs=None, paths=None, covariances=None, auto_exogeno
 
     cfi_val = fit_df.loc["CFI (適合度指数)", "値"] if "CFI (適合度指数)" in fit_df.index else 0.95
     rmsea_val = fit_df.loc["RMSEA (二乗平均平方根誤差)", "値"] if "RMSEA (二乗平均平方根誤差)" in fit_df.index else 0.05
-    note = f"注. サンプルサイズ N = {n_sample}。CFI = {cfi_val:.3f}, RMSEA = {rmsea_val:.3f}。実線矢印は有意なパス (p < .05)、点線矢印は非有意 (ns)、点線両矢印は共分散 (相関) を表します。*** p < .001, ** p < .01, * p < .05。"
+    note = f"注. サンプルサイズ $N$ = {n_sample}。$CFI$ = {cfi_val:.3f}, $RMSEA$ = {rmsea_val:.3f}。実線矢印は有意なパス ($p$ < .05)、点線矢印は非有意 (ns)、点線両矢印は共分散 (相関) を表します。*** $p$ < .001, ** $p$ < .01, * $p$ < .05。"
 
     return param_df, fit_df, indirect_df, note, fig_bytes, {
         "latent_names": list(latent_names),
@@ -1616,7 +1635,7 @@ def render_sem_path_diagram(
     """
     APAスタイルのSEM / パス解析 ダイアグラムを描画
     - 上部タイトルは入れない
-    - 図の下部に適合度指標を横並びで記載
+    - 図の下部に適合度指標を横並びで記載 (統計記号はイタリック体)
     - Web画面からのカスタマイズに対応
     """
     setup_japanese_font()
@@ -1687,9 +1706,9 @@ def render_sem_path_diagram(
             y = y_top - ((y_top - y_bottom) * (i / max(1, n_in_col - 1))) if n_in_col > 1 else (y_top + y_bottom) / 2
             pos[v] = (x, y)
 
-    # 係数列の選択
+    # 係数列の選択 (イタリック記号)
     coef_col = "標準化係数 (β)" if "β" in coef_type else "非標準化係数 (B)"
-    coef_symbol = "β" if "β" in coef_type else "B"
+    coef_symbol = "$\\beta$" if "β" in coef_type else "$B$"
 
     # パス (矢印) の描画
     for p in paths:
@@ -1742,7 +1761,7 @@ def render_sem_path_diagram(
                     # 相関係数テキスト
                     cx = (x1 + x2) / 2
                     cy = max(y1, y2) + 0.09
-                    cov_sym = "r" if "β" in coef_type else "Cov"
+                    cov_sym = "$r$" if "β" in coef_type else "$Cov$"
                     ax.text(cx, cy, f"{cov_sym} = {beta_cov:.2f}", fontsize=font_size - 2, color=cov_color, ha="center", va="center",
                             bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.85))
 
@@ -1755,7 +1774,7 @@ def render_sem_path_diagram(
         lw = 2.0 if is_latent else 1.5
         
         # 決定係数 R² の表示 (内生変数の場合)
-        r2_text = f"\n(R² = {r2_map[v]:.2f})" if (show_r2 and v in r2_map) else ""
+        r2_text = f"\n($R^2$ = {r2_map[v]:.2f})" if (show_r2 and v in r2_map) else ""
         
         ax.text(x, y, f"{v}{r2_text}", fontsize=font_size, fontweight="bold", color=text_color,
                 ha="center", va="center",
@@ -1769,19 +1788,19 @@ def render_sem_path_diagram(
             df_val = int(fit_df.loc["自由度 (df)", "値"]) if "自由度 (df)" in fit_df.index else 0
             p_val = fit_df.loc["カイ二乗検定 p値", "値"] if "カイ二乗検定 p値" in fit_df.index else 0.0
             p_str = "< .001" if p_val < 0.001 else f"= {p_val:.3f}".replace("0.", ".")
-            fit_items.append(f"χ²({df_val}) = {chi_val:.2f} (p {p_str})")
+            fit_items.append(f"$\\chi^2$({df_val}) = {chi_val:.2f} ($p$ {p_str})")
         if "CFI (適合度指数)" in fit_df.index:
-            fit_items.append(f"CFI = {fit_df.loc['CFI (適合度指数)', '値']:.3f}".replace("0.", "."))
+            fit_items.append(f"$CFI$ = {fit_df.loc['CFI (適合度指数)', '値']:.3f}".replace("0.", "."))
         if "TLI / NNFI" in fit_df.index:
-            fit_items.append(f"TLI = {fit_df.loc['TLI / NNFI', '値']:.3f}".replace("0.", "."))
+            fit_items.append(f"$TLI$ = {fit_df.loc['TLI / NNFI', '値']:.3f}".replace("0.", "."))
         if "RMSEA (二乗平均平方根誤差)" in fit_df.index:
-            fit_items.append(f"RMSEA = {fit_df.loc['RMSEA (二乗平均平方根誤差)', '値']:.3f}".replace("0.", "."))
+            fit_items.append(f"$RMSEA$ = {fit_df.loc['RMSEA (二乗平均平方根誤差)', '値']:.3f}".replace("0.", "."))
         if "SRMR (標準化残差平均)" in fit_df.index:
-            fit_items.append(f"SRMR = {fit_df.loc['SRMR (標準化残差平均)', '値']:.3f}".replace("0.", "."))
+            fit_items.append(f"$SRMR$ = {fit_df.loc['SRMR (標準化残差平均)', '値']:.3f}".replace("0.", "."))
 
-        footer_text = " | ".join(fit_items)
+        footer_text = "  |  ".join(fit_items)
         ax.text(0.5, 0.05, f"適合度指標:  {footer_text}", fontsize=font_size - 1.5, color="#334155",
-                ha="center", va="center", style="italic",
+                ha="center", va="center",
                 bbox=dict(boxstyle="round,pad=0.35", fc="#f1f5f9", ec="#cbd5e1", lw=0.8, alpha=0.9))
 
     ax.set_xlim(0.0, 1.0)
