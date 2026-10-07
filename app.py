@@ -4,13 +4,16 @@ APA Style Statistical Analysis Web Application using Streamlit.
 """
 
 import io
+import importlib
 import streamlit as st
 import pandas as pd
 import numpy as np
 
-# カスタムモジュールの読み込み
+# カスタムモジュールの読み込み & 自動リロード
 import stats_engine
 import apa_excel
+importlib.reload(stats_engine)
+importlib.reload(apa_excel)
 
 st.set_page_config(
     page_title="APAスタイル 統計解析 Webアプリ",
